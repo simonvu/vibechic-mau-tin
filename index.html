@@ -51,6 +51,19 @@
 
       <h3 class="section-label">Ảnh sản phẩm</h3>
       <div id="imageCopyActions" class="image-copy-list"></div>
+      <div id="multiShareBar" class="multi-share-bar" hidden>
+        <div class="multi-share-row">
+          <button type="button" class="btn btn-ghost" id="btnSelectAllImages">Chọn tất cả</button>
+          <span id="multiShareCount" class="multi-share-count">0 đã chọn</span>
+        </div>
+        <label class="multi-share-toggle" for="shareWithMessage">
+          <input type="checkbox" id="shareWithMessage" />
+          <span>Kèm nội dung tin nhắn</span>
+        </label>
+        <p class="multi-share-hint">Meta / nhiều app bỏ chữ khi gửi ảnh — bật để copy tin trước, rồi dán sau.</p>
+        <button type="button" class="btn btn-primary" id="btnShareSelectedImages" disabled>Chia sẻ (0) ảnh</button>
+      </div>
+      <button type="button" class="btn btn-ghost" id="btnToggleMultiSelect" style="width:100%;margin-top:8px">☑️ Chọn nhiều ảnh</button>
       <button type="button" class="btn btn-secondary" id="btnAddImagesDetail" style="width:100%;margin-top:8px">＋ Thêm ảnh từ Thư viện</button>
 
       <details class="more-opts" id="moreOpts">

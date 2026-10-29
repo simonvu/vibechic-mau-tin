@@ -29,6 +29,11 @@
   let hiddenIds = {}; // { [productId]: true } personal hide of team/admin items
   let myDeviceId = null;
   let staffDisplayName = '';
+  let multiSelectMode = false;
+  let selectedImageIdx = new Set(); // indices into product.images
+  let preparedShareFiles = new Map(); // idx -> File (ready for sync share)
+  let shareWithMessage = localStorage.getItem('vc-share-msg') === '1';
+
 
   function toast(msg) {
     const el = $('#toast');
@@ -188,6 +193,133 @@
     if (!navigator.clipboard || !window.ClipboardItem) return Promise.reject(new Error('no clipboard'));
     return navigator.clipboard.write([new ClipboardItem({ 'image/png': blobToPngBlob(blob) })]);
   }
+
+  function slugFilePart(s) {
+    return String(s || 'vibechic')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd').replace(/Đ/g, 'D')
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'vibechic';
+  }
+
+  async function resolveImageDataURL(im) {
+    if (im && im.dataURL) return im;
+    let next = await ensureImageCached({ ...(im || {}) });
+    if (next.dataURL) return next;
+    // Last resort: fetch public URL (may be encrypted JSON — ensureImageCached handles that)
+    const url = imagePublicUrl(im);
+    if (url && !im.dataURL) {
+      try {
+        const res = await fetch(url + (url.includes('?') ? '&' : '?') + 't=' + Date.now(), { cache: 'no-store' });
+        if (res.ok) {
+          const ct = res.headers.get('Content-Type') || '';
+          if (ct.includes('application/json')) {
+            const env = await res.json();
+            if (teamKey && CryptoUtil.isEncryptedEnvelope(env)) {
+              const bytes = await CryptoUtil.decryptBytes(teamKey, env);
+              let binary = '';
+              const chunk = 0x8000;
+              for (let i = 0; i < bytes.length; i += chunk) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+              }
+              next = { ...im, dataURL: 'data:image/jpeg;base64,' + btoa(binary) };
+              return next;
+            }
+          } else if (ct.startsWith('image/') || ct.includes('octet-stream')) {
+            const blob = await res.blob();
+            const dataURL = await blobToDataURL(blob);
+            next = { ...im, dataURL };
+            return next;
+          }
+        }
+      } catch (e) { console.warn('resolveImage', e); }
+    }
+    return next || im;
+  }
+
+  function fileFromDataURL(dataURL, fileName) {
+    const blob = dataURLToBlob(dataURL);
+    const mime = blob.type || 'image/jpeg';
+    const ext = /png/i.test(mime) ? 'png' : (/webp/i.test(mime) ? 'webp' : 'jpg');
+    const base = String(fileName || 'vibechic').replace(/\.(jpe?g|png|webp)$/i, '');
+    return new File([blob], base + '.' + ext, { type: mime.includes('png') ? 'image/png' : (mime.includes('webp') ? 'image/webp' : 'image/jpeg') });
+  }
+
+  async function prepareShareFileForIndex(p, idx) {
+    const im = p && p.images && p.images[idx];
+    if (!im) throw new Error('missing image');
+    const resolved = await resolveImageDataURL(im);
+    if (!resolved.dataURL) throw new Error('Ảnh chưa tải');
+    // Persist dataURL onto product image for later copy
+    if (p.images[idx] && !p.images[idx].dataURL) p.images[idx].dataURL = resolved.dataURL;
+    const name = slugFilePart(p.title) + '-' + (idx + 1);
+    const file = fileFromDataURL(resolved.dataURL, name);
+    preparedShareFiles.set(idx, file);
+    return file;
+  }
+
+  function canShareFiles(files) {
+    if (!navigator.share) return false;
+    if (!files || !files.length) return false;
+    try {
+      if (navigator.canShare && !navigator.canShare({ files })) return false;
+    } catch (_) { return false; }
+    return true;
+  }
+
+  function updateMultiShareBar() {
+    const bar = $('#multiShareBar');
+    const toggleBtn = $('#btnToggleMultiSelect');
+    const shareBtn = $('#btnShareSelectedImages');
+    const countEl = $('#multiShareCount');
+    const msgToggle = $('#shareWithMessage');
+    if (!bar || !toggleBtn) return;
+    bar.hidden = !multiSelectMode;
+    toggleBtn.textContent = multiSelectMode ? '✕ Hủy chọn nhiều' : '☑️ Chọn nhiều ảnh';
+    const n = selectedImageIdx.size;
+    let ready = 0;
+    for (const i of selectedImageIdx) if (preparedShareFiles.has(i)) ready++;
+    if (countEl) {
+      countEl.textContent = n
+        ? (ready < n ? (ready + '/' + n + ' sẵn sàng') : (n + ' đã chọn'))
+        : '0 đã chọn';
+    }
+    if (shareBtn) {
+      // Only enable when every selected file is already prepared (iOS user-activation)
+      shareBtn.disabled = n === 0 || ready < n;
+      shareBtn.textContent = 'Chia sẻ (' + n + ') ảnh';
+    }
+    if (msgToggle) msgToggle.checked = !!shareWithMessage;
+  }
+
+  function renderDetailImages(p) {
+    const imgs = p.images || [];
+    const synced = imgs.filter((im) => im.source !== 'local');
+    const locals = imgs.filter((im) => im.source === 'local');
+    const renderImgRow = (im, i) => {
+      const selected = selectedImageIdx.has(i);
+      const selClass = multiSelectMode ? ('select-mode' + (selected ? ' selected' : '')) : '';
+      const check = multiSelectMode
+        ? `<span class="img-check" aria-hidden="true">${selected ? '✓' : ''}</span>`
+        : '';
+      return `
+      <div class="image-copy-item ${selClass}" data-img-idx="${i}" role="${multiSelectMode ? 'checkbox' : 'group'}" aria-checked="${selected ? 'true' : 'false'}">
+        ${check}
+        <img src="${im.dataURL || imagePublicUrl(im) || ''}" alt="Ảnh ${i + 1}" />
+        <button type="button" class="btn btn-secondary btn-copy-single" data-copy-img="${i}">🖼️ Copy ảnh${im.source === 'local' ? ' <span class="tag-local">local</span>' : ''}</button>
+        ${multiSelectMode ? `<span style="flex:1;font-size:0.9rem;font-weight:600">Ảnh ${i + 1}${selected ? ' · đã chọn' : ''}</span>` : ''}
+      </div>`;
+    };
+    $('#imageCopyActions').innerHTML =
+      (synced.length ? `<div class="section-label">Ảnh đồng bộ</div>` : '') +
+      synced.map((im) => renderImgRow(im, imgs.indexOf(im))).join('') +
+      (locals.length ? `<div class="section-label" style="margin-top:8px">Ảnh chỉ trên máy này</div>` : '') +
+      locals.map((im) => renderImgRow(im, imgs.indexOf(im))).join('') +
+      (!imgs.length ? '<p style="color:var(--muted);font-size:0.9rem">Chưa có ảnh</p>' : '');
+    updateMultiShareBar();
+  }
+
   async function resizeImageFile(file) {
     const bitmap = await createImageBitmap(file);
     let { width, height } = bitmap;
@@ -449,21 +581,16 @@
         <button type="button" class="btn btn-primary" style="width:100%" data-copy-var="${v.id}">📋 Copy chữ</button>
       </div>`).join('') || '<p style="color:var(--muted)">Chưa có mẫu câu</p>';
 
-    const imgs = p.images || [];
-    const synced = imgs.filter((im) => im.source !== 'local');
-    const locals = imgs.filter((im) => im.source === 'local');
-    const renderImgRow = (im, i, label) => `
-      <div class="image-copy-item">
-        <img src="${im.dataURL || imagePublicUrl(im)}" alt="Ảnh ${i+1}" />
-        <button type="button" class="btn btn-secondary" data-copy-img="${i}">🖼️ ${label}${im.source==='local'?' <span class="tag-local">local</span>':''}</button>
-      </div>`;
-    $('#imageCopyActions').innerHTML =
-      (synced.length ? `<div class="section-label">Ảnh đồng bộ</div>` : '') +
-      synced.map((im) => renderImgRow(im, imgs.indexOf(im), 'Copy ảnh')).join('') +
-      (locals.length ? `<div class="section-label" style="margin-top:8px">Ảnh chỉ trên máy này</div>` : '') +
-      locals.map((im) => renderImgRow(im, imgs.indexOf(im), 'Copy ảnh')).join('');
-    $('#saveImagesFallback').innerHTML = imgs.map((im, i) =>
+    // Reset multi-select when opening a product
+    multiSelectMode = false;
+    selectedImageIdx = new Set();
+    preparedShareFiles = new Map();
+    renderDetailImages(p);
+    $('#saveImagesFallback').innerHTML = (p.images || []).map((im, i) =>
       `<button type="button" class="btn btn-ghost" data-save-img="${i}">💾 Lưu ảnh ${i+1}</button>`).join('');
+    const msToggle = $('#btnToggleMultiSelect');
+    if (msToggle) msToggle.hidden = !(p.images && p.images.length);
+    updateMultiShareBar();
     showOverlay('#detailOverlay');
   }
 
@@ -1211,20 +1338,143 @@
       await copyText(v.html, $('#unicodeToggle').checked);
     });
 
-    $('#imageCopyActions').addEventListener('click', (e) => {
+    $('#imageCopyActions').addEventListener('click', async (e) => {
+      const p = products.find((x) => x.id === currentId);
+      if (!p) return;
+
+      // Multi-select: tap row (not Copy button) to toggle
+      if (multiSelectMode) {
+        const row = e.target.closest('[data-img-idx]');
+        if (!row) return;
+        // Allow Copy button to still work if somehow visible
+        if (e.target.closest('[data-copy-img]')) {
+          /* fall through to copy below */
+        } else {
+          const idx = Number(row.getAttribute('data-img-idx'));
+          if (Number.isNaN(idx)) return;
+          if (selectedImageIdx.has(idx)) {
+            selectedImageIdx.delete(idx);
+            preparedShareFiles.delete(idx);
+          } else {
+            selectedImageIdx.add(idx);
+            try {
+              await prepareShareFileForIndex(p, idx);
+            } catch (err) {
+              selectedImageIdx.delete(idx);
+              toast(err.message || 'Không chuẩn bị được ảnh');
+            }
+          }
+          renderDetailImages(p);
+          return;
+        }
+      }
+
       const btn = e.target.closest('[data-copy-img]');
       if (!btn) return;
-      const p = products.find((x) => x.id === currentId);
-      const im = p && p.images[Number(btn.dataset.copyImg)];
-      if (!im || !im.dataURL) { toast('Ảnh chưa tải — thử Đồng bộ'); return; }
-      copyImageToClipboard(im.dataURL)
-        .then(() => toast('Đã copy ảnh ✓'))
-        .catch(() => {
-          const a = document.createElement('a');
-          a.href = im.dataURL; a.download = `anh-${btn.dataset.copyImg}.jpg`; a.click();
-          toast('Đã tải ảnh xuống');
-        });
+      const im = p.images[Number(btn.dataset.copyImg)];
+      if (!im) return;
+      try {
+        const resolved = await resolveImageDataURL(im);
+        if (!resolved.dataURL) { toast('Ảnh chưa tải — thử Đồng bộ'); return; }
+        if (!im.dataURL) im.dataURL = resolved.dataURL;
+        await copyImageToClipboard(resolved.dataURL);
+        toast('Đã copy ảnh ✓');
+      } catch (_) {
+        const a = document.createElement('a');
+        const url = im.dataURL || imagePublicUrl(im);
+        if (!url) { toast('Không copy được'); return; }
+        a.href = url; a.download = `anh-${btn.dataset.copyImg}.jpg`; a.click();
+        toast('Đã tải ảnh xuống');
+      }
     });
+
+    const btnToggleMulti = $('#btnToggleMultiSelect');
+    if (btnToggleMulti) btnToggleMulti.onclick = () => {
+      const p = products.find((x) => x.id === currentId);
+      if (!p || !(p.images || []).length) { toast('Chưa có ảnh'); return; }
+      multiSelectMode = !multiSelectMode;
+      if (!multiSelectMode) {
+        selectedImageIdx = new Set();
+        preparedShareFiles = new Map();
+      }
+      renderDetailImages(p);
+    };
+
+    const btnSelectAll = $('#btnSelectAllImages');
+    if (btnSelectAll) btnSelectAll.onclick = async () => {
+      const p = products.find((x) => x.id === currentId);
+      if (!p || !multiSelectMode) return;
+      const imgs = p.images || [];
+      toast('Đang chuẩn bị ảnh…');
+      for (let i = 0; i < imgs.length; i++) {
+        selectedImageIdx.add(i);
+        try { await prepareShareFileForIndex(p, i); }
+        catch (err) {
+          selectedImageIdx.delete(i);
+          console.warn(err);
+        }
+      }
+      renderDetailImages(p);
+      if (!selectedImageIdx.size) toast('Không chuẩn bị được ảnh');
+      else toast('Đã chọn ' + selectedImageIdx.size + ' ảnh');
+    };
+
+    const msgCb = $('#shareWithMessage');
+    if (msgCb) {
+      msgCb.checked = !!shareWithMessage;
+      msgCb.onchange = () => {
+        shareWithMessage = !!msgCb.checked;
+        localStorage.setItem('vc-share-msg', shareWithMessage ? '1' : '0');
+      };
+    }
+
+    const btnShareSel = $('#btnShareSelectedImages');
+    if (btnShareSel) btnShareSel.onclick = async () => {
+      // iOS: share must run under user gesture with files already prepared on select
+      const p = products.find((x) => x.id === currentId);
+      if (!p || !selectedImageIdx.size) return;
+      const idxs = [...selectedImageIdx].sort((a, b) => a - b);
+      for (const i of idxs) {
+        if (!preparedShareFiles.has(i)) {
+          toast('Ảnh chưa sẵn sàng — chờ / chọn lại');
+          return;
+        }
+      }
+      const files = idxs.map((i) => preparedShareFiles.get(i));
+      if (!files.length) { toast('Chưa có ảnh để chia sẻ'); return; }
+
+      if (shareWithMessage) {
+        const v = p.variants.find((x) => x.id === selectedVariantId) || p.variants[0];
+        if (v) {
+          try {
+            const plain = htmlToPlain(v.html, { unicode: $('#unicodeToggle').checked });
+            // clipboard write is still within the tap gesture
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              await navigator.clipboard.writeText(plain);
+            } else {
+              const ta = document.createElement('textarea');
+              ta.value = plain; document.body.appendChild(ta); ta.select();
+              document.execCommand('copy'); ta.remove();
+            }
+            toast('Đã copy nội dung, dán vào sau khi chọn ảnh');
+          } catch (_) {
+            toast('Không copy được nội dung — vẫn chia sẻ ảnh');
+          }
+        }
+      }
+
+      if (!canShareFiles(files)) {
+        toast('Máy này không hỗ trợ chia sẻ nhiều ảnh — dùng Copy ảnh từng cái');
+        return;
+      }
+      try {
+        await navigator.share({ files });
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+        console.warn(err);
+        toast('Không chia sẻ được — thử Copy ảnh');
+      }
+    };
     $('#saveImagesFallback').addEventListener('click', (e) => {
       const btn = e.target.closest('[data-save-img]');
       if (!btn) return;

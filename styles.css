@@ -441,3 +441,48 @@ img { max-width: 100%; display: block; }
   white-space: nowrap;
 }
 .sw-update-toast[hidden] { display: none !important; }
+
+
+/* Multi-image share (Meta Business / iOS share sheet) */
+.multi-share-bar {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.multi-share-bar[hidden] { display: none !important; }
+.multi-share-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.multi-share-count { color: var(--muted); font-size: 0.88rem; font-weight: 600; }
+.multi-share-toggle {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 0.92rem; font-weight: 600; cursor: pointer;
+}
+.multi-share-toggle input { width: 18px; height: 18px; accent-color: var(--pink); }
+.multi-share-hint {
+  margin: 0; font-size: 0.78rem; color: var(--muted); line-height: 1.35;
+}
+.image-copy-item.select-mode { cursor: pointer; position: relative; }
+.image-copy-item.select-mode.selected {
+  border-color: var(--pink);
+  box-shadow: 0 0 0 2px rgba(42,42,42,0.12);
+  background: #fff;
+}
+.image-copy-item .img-check {
+  position: absolute; top: 6px; left: 6px;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: rgba(255,255,255,0.92);
+  border: 2px solid var(--border);
+  display: grid; place-items: center;
+  font-size: 0.75rem; font-weight: 800; color: transparent;
+  z-index: 2;
+}
+.image-copy-item.selected .img-check {
+  background: var(--pink); border-color: var(--pink); color: #fff;
+}
+.image-copy-item.select-mode .btn-copy-single { display: none; }

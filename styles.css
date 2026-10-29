@@ -90,21 +90,21 @@ img { max-width: 100%; display: block; }
 }
 .card:active { transform: scale(0.985); }
 .card-row { display: flex; gap: 12px; align-items: flex-start; }
-.card-thumb-wrap { flex: 0 0 64px; width: 64px; height: 64px; }
+.card-thumb-wrap { flex: 0 0 96px; width: 96px; height: 96px; }
 .card-thumb, .card-thumb-wrap > img.card-thumb {
-  width: 64px; height: 64px; object-fit: cover;
+  width: 96px; height: 96px; object-fit: cover;
   border-radius: 14px; display: block; background: var(--bg2);
   border: 1px solid var(--border);
 }
 .card-thumb.placeholder {
-  width: 64px; height: 64px; border-radius: 14px;
+  width: 96px; height: 96px; border-radius: 14px;
   background: linear-gradient(145deg, #F0DAC5, #E8D0BC);
   border: 1px solid var(--border);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 2px; position: relative; overflow: hidden;
 }
 .card-thumb.placeholder img {
-  width: 28px; height: 28px; border-radius: 8px; object-fit: cover; opacity: 0.9;
+  width: 40px; height: 40px; border-radius: 10px; object-fit: cover; opacity: 0.9;
 }
 .card-thumb.placeholder span {
   font-size: 0.7rem; font-weight: 800; color: #5A4638; line-height: 1;

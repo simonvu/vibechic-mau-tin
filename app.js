@@ -522,7 +522,7 @@
     if (im) {
       const src = im.dataURL || imagePublicUrl(im);
       if (src) {
-        return `<img class="card-thumb" src="${src}" alt="" loading="lazy" decoding="async" width="64" height="64" />`;
+        return `<img class="card-thumb" src="${src}" alt="" loading="lazy" decoding="async" width="96" height="96" />`;
       }
     }
     const initial = ((p.title || '?').trim().charAt(0) || '?').toUpperCase();

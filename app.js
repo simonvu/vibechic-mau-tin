@@ -357,7 +357,9 @@
       const check = multiSelectMode
         ? `<span class="img-check" aria-hidden="true">${selected ? '✓' : ''}</span>`
         : '';
-      const badge = personal ? '<span class="badge-rieng">riêng mình</span>' : '';
+      const badge = personal
+        ? '<span class="src-icon src-me" title="Ảnh riêng của tôi" aria-label="Riêng mình">🔒</span>'
+        : '<span class="src-icon src-team" title="Ảnh của team" aria-label="Team">👥</span>';
       const src = im.dataURL || imagePublicUrl(im) || '';
       return `<div class="img-tile ${selClass}" data-img-idx="${i}" role="${multiSelectMode ? 'checkbox' : 'group'}" aria-checked="${selected ? 'true' : 'false'}">
         ${badge}${check}
@@ -366,6 +368,19 @@
       </div>`;
     }).join('');
     updateSendFlowUI(p);
+  }
+
+  function openLightbox(src) {
+    let lb = document.getElementById('imgLightbox');
+    if (!lb) {
+      lb = document.createElement('div');
+      lb.id = 'imgLightbox';
+      lb.innerHTML = '<img alt="Ảnh lớn" /><button type="button" class="lb-close" aria-label="Đóng">✕</button>';
+      lb.addEventListener('click', () => lb.classList.remove('show'));
+      document.body.appendChild(lb);
+    }
+    lb.querySelector('img').src = src;
+    lb.classList.add('show');
   }
 
     async function resizeImageFile(file) {
@@ -1407,7 +1422,11 @@
       }
 
       const btn = e.target.closest('[data-copy-img]');
-      if (!btn) return;
+      if (!btn) {
+        const imgEl = e.target.closest('.img-tile img');
+        if (imgEl && imgEl.src) openLightbox(imgEl.src);
+        return;
+      }
       const im = p.images[Number(btn.dataset.copyImg)];
       if (!im) return;
       try {

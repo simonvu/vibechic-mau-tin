@@ -439,7 +439,7 @@
       const by = (p.authorName || '').trim();
       return by ? ('team · by ' + by) : 'team';
     }
-    return 'admin';
+    return 'team';
   }
   function canEditProduct(p) {
     if (!p) return false;
@@ -547,11 +547,10 @@
       const pinLabel = pinBits.length ? ` · 📌 ${pinBits.join('+')}` : '';
       return `<button type="button" class="card${isHot(p) ? ' card-hot' : ''}" data-id="${p.id}">
         <div class="card-row">
-          <div class="card-thumb-wrap">${cardThumbHtml(p)}</div>
+          <div class="card-thumb-wrap">${cardThumbHtml(p)}<span class="thumb-count">${n} câu</span></div>
           <div class="card-body">
             <div class="title">${isHot(p) ? '<span class="pin-badge" aria-hidden="true">📌</span> ' : ''}${escapeHtml(p.title)}</div>
             <div class="meta">${escapeHtml(p.category || 'Khác')} · ${(p.images||[]).length} ảnh · ${escapeHtml(sourceLabel(p))}${pinLabel}</div>
-            <div class="badge">${n} mẫu câu</div>
             <div class="preview">${preview}</div>
           </div>
         </div>

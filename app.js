@@ -288,6 +288,22 @@
       `<button type="button" class="chip${c === activeCategory ? ' active' : ''}" data-cat="${escapeHtml(c)}">${escapeHtml(c)}</button>`
     ).join('');
   }
+  function cardThumbHtml(p) {
+    const imgs = p.images || [];
+    const synced = imgs.find((im) => im.source === 'synced' || im.path);
+    const local = imgs.find((im) => im.source === 'local' && (im.dataURL || im.url));
+    const any = imgs.find((im) => im.dataURL || imagePublicUrl(im));
+    const im = synced || local || any;
+    if (im) {
+      const src = im.dataURL || imagePublicUrl(im);
+      if (src) {
+        return `<img class="card-thumb" src="${src}" alt="" loading="lazy" decoding="async" width="64" height="64" />`;
+      }
+    }
+    const initial = ((p.title || '?').trim().charAt(0) || '?').toUpperCase();
+    return `<div class="card-thumb placeholder" aria-hidden="true"><img src="icons/logo-128.png" alt="" loading="lazy" width="28" height="28" /><span>${escapeHtml(initial)}</span></div>`;
+  }
+
   function renderList() {
     const list = filtered();
     const box = $('#productList');
@@ -299,19 +315,21 @@
     const rest = list.filter((p) => !isHot(p));
     const card = (p) => {
       const n = (p.variants || []).length;
-      const thumbs = (p.images || []).slice(0, 3).map((im) =>
-        `<img src="${im.dataURL || imagePublicUrl(im)}" alt="" loading="lazy" />`).join('');
       const preview = (p.variants && p.variants[0]) ? p.variants[0].html : '';
       const pinBits = [];
       if (p.pinned) pinBits.push('đội');
       if (localPins[p.id] != null) pinBits.push('máy');
       const pinLabel = pinBits.length ? ` · 📌 ${pinBits.join('+')}` : '';
       return `<button type="button" class="card${isHot(p) ? ' card-hot' : ''}" data-id="${p.id}">
-        <div class="title">${isHot(p) ? '<span class="pin-badge" aria-hidden="true">📌</span> ' : ''}${escapeHtml(p.title)}</div>
-        <div class="meta">${escapeHtml(p.category || 'Khác')} · ${(p.images||[]).length} ảnh${pinLabel}</div>
-        <div class="badge">${n} mẫu câu</div>
-        <div class="preview">${preview}</div>
-        ${thumbs ? `<div class="thumbs">${thumbs}</div>` : ''}
+        <div class="card-row">
+          <div class="card-thumb-wrap">${cardThumbHtml(p)}</div>
+          <div class="card-body">
+            <div class="title">${isHot(p) ? '<span class="pin-badge" aria-hidden="true">📌</span> ' : ''}${escapeHtml(p.title)}</div>
+            <div class="meta">${escapeHtml(p.category || 'Khác')} · ${(p.images||[]).length} ảnh${pinLabel}</div>
+            <div class="badge">${n} mẫu câu</div>
+            <div class="preview">${preview}</div>
+          </div>
+        </div>
       </button>`;
     };
     let html = '';

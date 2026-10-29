@@ -85,24 +85,40 @@ img { max-width: 100%; display: block; }
 .list { padding: 8px 16px 24px; display: flex; flex-direction: column; gap: 12px; }
 .card {
   background: var(--card); border-radius: var(--radius);
-  padding: 14px 16px; box-shadow: var(--shadow);
+  padding: 12px 14px; box-shadow: var(--shadow);
   border: 1px solid var(--border); text-align: left; width: 100%;
 }
 .card:active { transform: scale(0.985); }
+.card-row { display: flex; gap: 12px; align-items: flex-start; }
+.card-thumb-wrap { flex: 0 0 64px; width: 64px; height: 64px; }
+.card-thumb, .card-thumb-wrap > img.card-thumb {
+  width: 64px; height: 64px; object-fit: cover;
+  border-radius: 14px; display: block; background: var(--bg2);
+  border: 1px solid var(--border);
+}
+.card-thumb.placeholder {
+  width: 64px; height: 64px; border-radius: 14px;
+  background: linear-gradient(145deg, #F0DAC5, #E8D0BC);
+  border: 1px solid var(--border);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; position: relative; overflow: hidden;
+}
+.card-thumb.placeholder img {
+  width: 28px; height: 28px; border-radius: 8px; object-fit: cover; opacity: 0.9;
+}
+.card-thumb.placeholder span {
+  font-size: 0.7rem; font-weight: 800; color: #5A4638; line-height: 1;
+}
+.card-body { flex: 1; min-width: 0; }
 .card .title { font-weight: 700; font-size: 1.05rem; margin: 0 0 4px; }
-.card .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 8px; }
+.card .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 6px; }
 .card .preview {
-  color: var(--text); font-size: 0.92rem; line-height: 1.45;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  color: var(--text); font-size: 0.88rem; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; opacity: 0.85;
 }
 .card .preview strong, .card .preview b { font-weight: 700; }
 .card .preview em, .card .preview i { font-style: italic; }
-.card .thumbs { display: flex; gap: 6px; margin-top: 10px; }
-.card .thumbs img {
-  width: 52px; height: 52px; object-fit: cover; border-radius: 10px;
-  background: var(--bg2);
-}
 .empty {
   text-align: center; padding: 48px 24px; color: var(--muted);
 }
@@ -306,9 +322,10 @@ img { max-width: 100%; display: block; }
 }
 .variant-card .v-label { font-weight: 700; font-size: 1rem; margin-bottom: 6px; }
 .variant-card .v-preview {
-  font-size: 0.88rem; line-height: 1.45; color: var(--text); opacity: 0.85;
-  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
-  margin-bottom: 10px;
+  font-size: 0.92rem; line-height: 1.5; color: var(--text);
+  display: block; overflow: visible;
+  -webkit-line-clamp: unset; line-clamp: unset;
+  margin-bottom: 12px; white-space: normal; word-break: break-word;
 }
 .variant-card .v-preview ul { margin: 0.3em 0; padding-left: 1.2em; }
 .edit-variant {

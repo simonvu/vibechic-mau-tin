@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="VibeChic" />
+  <meta name="theme-color" content="#F0DAC5" />
+  <meta name="description" content="Mẫu tin nhắn chăm sóc khách hàng VibeChic" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" href="icons/favicon.png" />
+  <title>VibeChic · Mẫu tin</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1><img class="logo" src="icons/logo-128.png" alt="VibeChic" width="36" height="36" /> VibeChic Mẫu tin</h1>
+    <div class="sub">Sản phẩm · nhiều mẫu câu · copy nhanh · <span id="syncStatus">…</span></div>
+    <div class="toolbar-row">
+      <div class="search">
+        <span aria-hidden="true">🔍</span>
+        <input id="searchInput" type="search" placeholder="Tìm sản phẩm / mẫu…" enterkeyhint="search" />
+      </div>
+      <button type="button" class="icon-btn" id="btnSettings" title="Cài đặt" aria-label="Cài đặt">⚙️</button>
+      <button type="button" class="icon-btn primary" id="btnAdd" title="Thêm sản phẩm" aria-label="Thêm sản phẩm">＋</button>
+    </div>
+  </header>
+
+  <div class="chips" id="categoryChips"></div>
+  <main class="list" id="productList"></main>
+  <div class="toast" id="toast" role="status"></div>
+
+  <!-- Product detail -->
+  <div class="overlay" id="detailOverlay" hidden>
+    <div class="sheet" role="dialog" aria-modal="true">
+      <div class="handle"></div>
+      <h2 id="detailTitle">Chi tiết</h2>
+      <div class="meta" id="detailMeta" style="color:var(--muted);font-size:0.85rem;margin-bottom:10px"></div>
+
+      <h3 class="section-label">Mẫu câu</h3>
+      <div id="variantList" class="variant-list"></div>
+
+      <h3 class="section-label">Ảnh sản phẩm</h3>
+      <div id="imageCopyActions" class="image-copy-list"></div>
+      <button type="button" class="btn btn-secondary" id="btnAddImagesDetail" style="width:100%;margin-top:8px">＋ Thêm ảnh từ Thư viện</button>
+
+      <details class="more-opts" id="moreOpts">
+        <summary>Tùy chọn thêm</summary>
+        <div class="toggle-row" style="margin-top:10px">
+          <div class="label">
+            Giữ đậm/nghiêng kiểu Unicode
+            <div class="hint">Phụ — chữ có dấu tiếng Việt có thể không đổi được.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="unicodeToggle" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="sheet-actions" id="saveImagesFallback" style="margin-top:8px"></div>
+        <button type="button" class="btn btn-ghost" id="btnShare" style="width:100%;margin-top:8px">📤 Chia sẻ mẫu đang chọn + ảnh</button>
+      </details>
+
+      <p id="teamPinHint" hidden style="color:var(--muted);font-size:0.85rem;margin:0 0 8px">📌 Admin đã ghim sản phẩm này (Đang hot cho cả đội).</p>
+      <div class="sheet-actions" style="flex-direction:column;gap:8px">
+        <button type="button" class="btn btn-secondary" id="btnLocalPin" style="width:100%">📌 Ghim trên máy này</button>
+        <div style="display:flex;gap:8px;width:100%">
+          <button type="button" class="btn btn-ghost" id="btnEdit" style="flex:1">✏️ Sửa</button>
+          <button type="button" class="btn btn-danger" id="btnDelete" style="flex:1">🗑️ Xóa SP</button>
+          <button type="button" class="btn btn-ghost" id="btnCloseDetail" style="flex:1">Đóng</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit product + variants -->
+  <div class="overlay" id="editOverlay" hidden>
+    <div class="sheet" role="dialog" aria-modal="true">
+      <div class="handle"></div>
+      <h2 id="editTitle">Thêm sản phẩm</h2>
+      <form id="editForm">
+        <input type="hidden" id="editId" />
+        <div class="field">
+          <label for="editTitleInput">Tên sản phẩm</label>
+          <input type="text" id="editTitleInput" required placeholder="VD: Set linen xanh pastel" maxlength="120" />
+        </div>
+        <div class="field">
+          <label for="editCategory">Nhóm</label>
+          <input type="text" id="editCategory" list="categoryList" placeholder="VD: Tư vấn sản phẩm" maxlength="60" />
+          <datalist id="categoryList"></datalist>
+        </div>
+
+        <div class="field">
+          <label>Ảnh sản phẩm (0–5, dùng chung cho mọi mẫu câu)</label>
+          <div class="images-row" id="editImages"></div>
+          <input type="file" id="imagePicker" accept="image/*" multiple class="sr-only" />
+        </div>
+
+        <div class="field">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <label style="margin:0">Mẫu câu</label>
+            <button type="button" class="btn btn-secondary" id="btnAddVariant" style="padding:8px 12px">＋ Thêm mẫu</button>
+          </div>
+          <div id="editVariants"></div>
+        </div>
+
+        <div class="sheet-actions">
+          <button type="button" class="btn btn-ghost" id="btnCancelEdit">Hủy</button>
+          <button type="submit" class="btn btn-primary">Lưu sản phẩm</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+
+  <!-- Team password unlock -->
+  <div class="overlay" id="lockOverlay" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" style="max-width:420px">
+      <div class="handle"></div>
+      <div style="text-align:center;margin-bottom:12px">
+        <img src="icons/logo-128.png" alt="" width="64" height="64" style="border-radius:16px" />
+      </div>
+      <h2 style="text-align:center">VibeChic · Mở khóa</h2>
+      <p style="color:var(--muted);font-size:0.92rem;text-align:center;line-height:1.45">
+        Nhập <b>mật khẩu đội</b> do admin đặt. Máy nhớ khóa sau lần đúng — không gửi mật khẩu lên GitHub.
+      </p>
+      <div class="field">
+        <label for="unlockPassword">Mật khẩu đội</label>
+        <input type="password" id="unlockPassword" autocomplete="current-password" placeholder="••••••••" />
+      </div>
+      <p id="unlockError" style="color:var(--danger);font-size:0.85rem;min-height:1.2em;margin:0 0 8px"></p>
+      <button type="button" class="btn btn-primary big" id="btnUnlock" style="width:100%">Mở khóa</button>
+      <p style="color:var(--muted);font-size:0.8rem;text-align:center;margin-top:12px">Có thể xem mẫu local khi chưa đồng bộ.</p>
+      <button type="button" class="btn btn-ghost" id="btnSkipUnlock" style="width:100%;margin-top:6px">Dùng offline (local)</button>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="overlay" id="settingsOverlay" hidden>
+    <div class="sheet" role="dialog" aria-modal="true">
+      <div class="handle"></div>
+      <h2>Cài đặt</h2>
+      <div class="settings-block">
+        <h3>Cài lên Màn hình chính</h3>
+        <p>Safari → Chia sẻ → <b>Thêm vào Màn hình chính</b>. Đồng bộ mẫu chữ + ảnh đã mã hóa từ GitHub (cần mật khẩu đội).</p>
+      </div>
+      <div class="settings-block">
+        <h3>Đồng bộ từ GitHub</h3>
+        <p>App kéo <code>templates.json</code> + ảnh (đã mã hóa), giải mã trên máy. Bấm để kéo ngay.</p>
+        <button type="button" class="btn btn-secondary" id="btnSyncNow">🔄 Đồng bộ ngay</button>
+      </div>
+      <div class="settings-block">
+        <h3>Nhập file mẫu (.json)</h3>
+        <p>Dự phòng khi chưa có GitHub. <b>Gộp</b> giữ ảnh theo sản phẩm.</p>
+        <button type="button" class="btn btn-secondary" id="btnImport">⬆️ Nhập file</button>
+        <input type="file" id="importFile" accept="application/json,.json,text/json" class="sr-only" />
+      </div>
+      <div class="settings-block">
+        <h3>Xuất file chữ</h3>
+        <button type="button" class="btn btn-ghost" id="btnExport">⬇️ Xuất JSON</button>
+      </div>
+      <div class="settings-block">
+        <h3>Unicode đậm/nghiêng mặc định</h3>
+        <div class="toggle-row" style="margin:0;padding:0;background:transparent">
+          <div class="label">Bật mặc định</div>
+          <label class="switch">
+            <input type="checkbox" id="defaultUnicode" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-block">
+        <h3>Đăng xuất / quên máy này</h3>
+        <p>Xóa khóa mật khẩu đội đã nhớ. Lần sau phải nhập lại để đồng bộ.</p>
+        <button type="button" class="btn btn-danger" id="btnLogout">Đăng xuất / quên máy này</button>
+      </div>
+      <div class="sheet-actions">
+        <button type="button" class="btn btn-ghost" id="btnCloseSettings">Đóng</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Import chooser -->
+  <div class="overlay" id="importOverlay" hidden>
+    <div class="sheet" role="dialog" aria-modal="true">
+      <div class="handle"></div>
+      <h2>Nhập file mẫu</h2>
+      <p style="color:var(--muted);font-size:0.92rem">File: <b id="importFileName">—</b></p>
+      <div class="settings-block">
+        <h3>Gộp (khuyên dùng)</h3>
+        <p>Cập nhật theo id sản phẩm / mẫu câu. <b>Giữ ảnh</b> đã gắn.</p>
+        <button type="button" class="btn btn-primary big" id="btnImportMerge">Gộp vào máy này</button>
+      </div>
+      <div class="settings-block">
+        <h3>Thay thế toàn bộ</h3>
+        <p>Xóa hết rồi nhập mới. Ảnh của sản phẩm bị xóa sẽ mất.</p>
+        <button type="button" class="btn btn-danger big" id="btnImportReplace">Thay thế toàn bộ</button>
+      </div>
+      <button type="button" class="btn btn-ghost" id="btnImportCancel" style="width:100%">Hủy</button>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="shared.js"></script>
+  <script src="crypto.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

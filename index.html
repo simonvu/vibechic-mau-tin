@@ -143,12 +143,28 @@
       <h2>Cài đặt</h2>
       <div class="settings-block">
         <h3>Cài lên Màn hình chính</h3>
-        <p>Safari → Chia sẻ → <b>Thêm vào Màn hình chính</b>. Đồng bộ mẫu chữ + ảnh đã mã hóa từ GitHub (cần mật khẩu đội).</p>
+        <p>Safari → Chia sẻ → <b>Thêm vào Màn hình chính</b>. Đồng bộ mẫu đội từ Cloudflare (cần mật khẩu đội). Cloud riêng máy dùng mã khôi phục.</p>
       </div>
       <div class="settings-block">
-        <h3>Đồng bộ từ GitHub</h3>
-        <p>App kéo <code>templates.json</code> + ảnh (đã mã hóa), giải mã trên máy. Bấm để kéo ngay.</p>
-        <button type="button" class="btn btn-secondary" id="btnSyncNow">🔄 Đồng bộ ngay</button>
+        <h3>Đồng bộ mẫu đội (cloud chung)</h3>
+        <p>Kéo <code>templates.json</code> + ảnh đội (đã mã hóa). Cần mật khẩu đội.</p>
+        <button type="button" class="btn btn-secondary" id="btnSyncNow">🔄 Đồng bộ mẫu đội</button>
+      </div>
+      <div class="settings-block">
+        <h3>Cloud riêng máy này</h3>
+        <p>Mẫu / ảnh / ghim <b>của bạn</b> được mã hóa trên máy rồi lưu riêng (máy khác không đọc được). Giữ <b>Mã khôi phục</b> khi đổi máy.</p>
+        <p id="deviceCloudStatus" style="font-size:0.85rem;color:var(--muted);margin:8px 0">…</p>
+        <label style="font-size:0.85rem;font-weight:600">Mã khôi phục</label>
+        <div style="display:flex;gap:8px;align-items:center;margin:6px 0 10px">
+          <code id="recoveryCodeDisplay" style="flex:1;font-size:0.78rem;word-break:break-all;background:#F5E6D3;padding:8px;border-radius:8px">—</code>
+          <button type="button" class="btn btn-ghost" id="btnCopyRecovery" style="flex-shrink:0">Copy</button>
+        </div>
+        <label style="font-size:0.85rem;font-weight:600">Khôi phục từ mã</label>
+        <input type="text" id="recoveryCodeInput" placeholder="XXXX-XXXX-…" autocomplete="off" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);margin:6px 0;box-sizing:border-box" />
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" class="btn btn-secondary" id="btnRestoreRecovery">Khôi phục từ mã</button>
+          <button type="button" class="btn btn-ghost" id="btnUploadDeviceCloud">Lưu lên cloud ngay</button>
+        </div>
       </div>
       <div class="settings-block">
         <h3>Nhập file mẫu (.json)</h3>
@@ -205,6 +221,7 @@
   <script src="config.js"></script>
   <script src="shared.js"></script>
   <script src="crypto.js"></script>
+  <script src="device-cloud.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

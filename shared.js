@@ -178,6 +178,7 @@
       sortOrder: raw.sortOrder != null ? raw.sortOrder : 0,
       pinned: !!raw.pinned,
       pinOrder: raw.pinned ? (raw.pinOrder != null ? Number(raw.pinOrder) : 0) : null,
+      personal: !!raw.personal,
       createdAt: raw.createdAt || Date.now(),
       updatedAt: raw.updatedAt || Date.now()
     };

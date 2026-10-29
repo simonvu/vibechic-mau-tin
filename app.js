@@ -251,6 +251,7 @@
     }
     refresh();
     if (currentId === id) openDetail(id);
+    queueDeviceCloudSave();
   }
 
     function categories() {
@@ -486,6 +487,7 @@
     const store = tx.objectStore(META);
     store.delete('teamKey');
     store.delete('passwordId');
+    store.delete('teamWriteToken');
     await txDone(tx);
     teamKey = null;
     teamPasswordId = null;
@@ -549,6 +551,12 @@
       throw new Error('Sai mật khẩu');
     }
     await saveTeamKey(key, meta.passwordId);
+    try {
+      if (window.VCDeviceCloud && CryptoUtil.deriveTeamWriteToken) {
+        const tok = await CryptoUtil.deriveTeamWriteToken(password);
+        await VCDeviceCloud.saveTeamWriteToken(setMeta, tok);
+      }
+    } catch (_) {}
     try {
       const cache = await caches.open('vibechic-data-v1');
       await cache.put('crypto-meta.json', new Response(JSON.stringify(meta), { headers: { 'Content-Type': 'application/json' } }));
@@ -650,7 +658,9 @@
       for (let i = 0; i < incoming.length; i++) {
         const inc = migrateProduct(incoming[i]);
         if (!inc) continue;
+        // Shared team sync must not clobber personal products
         const prev = byId.get(inc.id);
+        if (prev && prev.personal && !inc.personal) continue;
         const localOnly = prev ? (prev.images || []).filter((im) => im.source === 'local') : [];
         const syncedIn = [];
         for (const im of (inc.images || [])) {
@@ -678,6 +688,9 @@
           sortOrder: inc.sortOrder != null ? inc.sortOrder : (prev ? prev.sortOrder : products.length + i),
           variants,
           images: [...syncedIn, ...localOnly],
+          personal: !!(inc.personal || (prev && prev.personal)),
+          pinned: !!inc.pinned,
+          pinOrder: inc.pinned ? (inc.pinOrder != null ? Number(inc.pinOrder) : 0) : null,
           createdAt: prev ? prev.createdAt : (inc.createdAt || Date.now()),
           updatedAt: Date.now()
         });
@@ -742,6 +755,77 @@
     products = await getAll();
   }
 
+
+  function setDeviceCloudStatus(msg) {
+    const el = $('#deviceCloudStatus');
+    if (el) el.textContent = msg || '';
+    if (msg && /Đã lưu lên cloud/.test(msg)) {
+      $('#syncStatus').textContent = msg.replace('Đã lưu lên cloud lúc', 'Cloud');
+    }
+  }
+
+  function queueDeviceCloudSave() {
+    if (!window.VCDeviceCloud) return;
+    VCDeviceCloud.scheduleUpload({
+      getMeta, setMeta, products, localPins,
+      onStatus: setDeviceCloudStatus
+    });
+  }
+
+  async function mergePersonalFromCloud(incomingProducts, incomingPins, overlays) {
+    for (const raw of (incomingProducts || [])) {
+      const inc = migrateProduct({ ...raw, personal: true });
+      if (!inc) continue;
+      const prev = products.find((x) => x.id === inc.id);
+      const cloudIds = new Set((inc.images || []).map((im) => im.id));
+      const extraLocal = prev
+        ? (prev.images || []).filter((im) => im.source === 'local' && im.dataURL && !cloudIds.has(im.id))
+        : [];
+      await putProduct({
+        ...(prev || {}),
+        ...inc,
+        personal: true,
+        images: [...(inc.images || []), ...extraLocal],
+        updatedAt: Date.now()
+      });
+    }
+    if (overlays && typeof overlays === 'object') {
+      for (const pid of Object.keys(overlays)) {
+        const prev = products.find((x) => x.id === pid);
+        if (!prev) continue;
+        const add = overlays[pid] || [];
+        const have = new Set((prev.images || []).map((im) => im.id));
+        const merged = [...(prev.images || [])];
+        for (const im of add) {
+          if (!im || have.has(im.id)) continue;
+          merged.push(im);
+          have.add(im.id);
+        }
+        await putProduct({ ...prev, images: merged, updatedAt: Date.now() });
+      }
+    }
+    if (incomingPins && typeof incomingPins === 'object') {
+      localPins = { ...localPins, ...incomingPins };
+      await saveLocalPins();
+    }
+    products = await getAll();
+    refresh();
+  }
+
+  async function refreshRecoveryUI() {
+    if (!window.VCDeviceCloud) return;
+    try {
+      const dev = await VCDeviceCloud.ensureDeviceKey(getMeta, setMeta);
+      const codeEl = $('#recoveryCodeDisplay');
+      if (codeEl) codeEl.textContent = dev.code;
+      const at = await getMeta('deviceCloudSavedAt');
+      if (at) setDeviceCloudStatus('Đã lưu lên cloud lúc ' + new Date(Number(at)).toLocaleString('vi-VN'));
+      else setDeviceCloudStatus('Chưa lưu cloud cá nhân (sẽ tự lưu sau khi sửa)');
+    } catch (e) {
+      setDeviceCloudStatus('Lỗi mã máy: ' + (e.message || e));
+    }
+  }
+
   function bind() {
     $('#searchInput').addEventListener('input', (e) => { searchQuery = e.target.value; renderList(); });
     $('#categoryChips').addEventListener('click', (e) => {
@@ -754,7 +838,45 @@
     $('#btnAdd').onclick = () => openEditor(null);
     $('#btnSettings').onclick = () => {
       $('#defaultUnicode').checked = unicodePrefer;
+      refreshRecoveryUI();
       showOverlay('#settingsOverlay');
+    };
+    const btnCopyRec = $('#btnCopyRecovery');
+    if (btnCopyRec) btnCopyRec.onclick = async () => {
+      const txt = ($('#recoveryCodeDisplay').textContent || '').trim();
+      if (!txt || txt === '—') return;
+      try {
+        await navigator.clipboard.writeText(txt);
+        toast('Đã copy mã khôi phục');
+      } catch (_) {
+        toast('Không copy được — hãy giữ chọn thủ công');
+      }
+    };
+    const btnRestore = $('#btnRestoreRecovery');
+    if (btnRestore) btnRestore.onclick = async () => {
+      const code = ($('#recoveryCodeInput').value || '').trim();
+      if (!code) { toast('Nhập mã khôi phục'); return; }
+      if (!confirm('Khôi phục sẽ dùng mã này làm khóa máy. Tiếp tục?')) return;
+      try {
+        await VCDeviceCloud.restoreFromRecoveryCode(code, getMeta, setMeta);
+        await refreshRecoveryUI();
+        const r = await VCDeviceCloud.pullAndMerge({
+          getMeta, setMeta,
+          mergePersonal: mergePersonalFromCloud,
+          onStatus: setDeviceCloudStatus
+        });
+        toast(r.ok ? (r.empty ? 'Mã OK — chưa có dữ liệu cloud' : 'Đã khôi phục từ mã') : 'Khôi phục lỗi');
+      } catch (e) {
+        toast(e.message || 'Mã không hợp lệ');
+      }
+    };
+    const btnUp = $('#btnUploadDeviceCloud');
+    if (btnUp) btnUp.onclick = async () => {
+      const r = await VCDeviceCloud.uploadPersonalCloud({
+        getMeta, setMeta, products, localPins,
+        onStatus: setDeviceCloudStatus
+      });
+      toast(r.ok ? 'Đã lưu cloud cá nhân' : (r.needTeam ? 'Cần mật khẩu đội trước' : 'Lưu cloud thất bại'));
     };
     $('#btnCloseSettings').onclick = () => hideOverlay('#settingsOverlay');
     $('#btnCloseDetail').onclick = () => hideOverlay('#detailOverlay');
@@ -779,6 +901,7 @@
       hideOverlay('#detailOverlay');
       refresh();
       toast('Đã xóa');
+      queueDeviceCloudSave();
     };
 
     $('#variantList').addEventListener('click', async (e) => {
@@ -914,6 +1037,7 @@
         products = await getAll();
         openDetail(p.id);
         toast('Đã thêm ảnh');
+        queueDeviceCloudSave();
       };
       picker.addEventListener('change', handler);
       picker.click();
@@ -954,12 +1078,17 @@
         path: im.path || null,
         hash: im.hash || null
       });
+      const isPersonal = !prev || !!prev.personal || !prev.pinned; // new or already personal → personal cloud
+      // Staff additions (new products) are always personal; editing a team product keeps team ownership
+      // unless it was already personal.
+      const personalFlag = prev ? !!prev.personal : true;
       await putProduct({
         id, title,
         category: $('#editCategory').value.trim() || 'Khác',
         variants, images,
         pinned: prev ? !!prev.pinned : false,
         pinOrder: prev && prev.pinned ? prev.pinOrder : null,
+        personal: personalFlag,
         sortOrder: prev ? prev.sortOrder : products.length,
         createdAt: prev ? prev.createdAt : Date.now(),
         updatedAt: Date.now()
@@ -967,7 +1096,8 @@
       products = await getAll();
       hideOverlay('#editOverlay');
       refresh();
-      toast('Đã lưu sản phẩm');
+      toast(personalFlag ? 'Đã lưu (cloud riêng máy)' : 'Đã lưu sản phẩm');
+      if (personalFlag) queueDeviceCloudSave();
     });
 
     $('#btnExport').onclick = () => {
@@ -1057,7 +1187,10 @@
         });
       } catch (_) {}
     }
-    // Check remote passwordId; prompt if needed then sync
+    // Ensure device key exists (recovery code)
+    try { await VCDeviceCloud.ensureDeviceKey(getMeta, setMeta); } catch (_) {}
+
+    // Check remote passwordId; prompt if needed then sync team pack + personal cloud
     try {
       const meta = await fetchCryptoMeta();
       if (meta && meta.passwordId) {
@@ -1075,6 +1208,13 @@
     } catch (_) {
       $('#syncStatus').textContent = 'Local';
     }
+    try {
+      await VCDeviceCloud.pullAndMerge({
+        getMeta, setMeta,
+        mergePersonal: mergePersonalFromCloud,
+        onStatus: setDeviceCloudStatus
+      });
+    } catch (_) {}
   }
   init().catch((err) => { console.error(err); toast('Lỗi khởi tạo'); });
 })();

@@ -1,4 +1,4 @@
-const CACHE = 'vibechic-templates-v10.1';
+const CACHE = 'vibechic-templates-v11';
 const ASSETS = [
   './',
   './index.html',
@@ -6,6 +6,7 @@ const ASSETS = [
   './app.js',
   './shared.js',
   './crypto.js',
+  './device-cloud.js',
   './config.js',
   './manifest.webmanifest',
   './icons/icon-192.png',

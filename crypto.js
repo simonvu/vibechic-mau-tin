@@ -99,10 +99,101 @@
     return true;
   }
 
+  /* ---- Per-device private cloud key (recovery code) ---- */
+  // Crockford Base32 (no I,L,O,U)
+  const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  const DEVICE_HKDF_INFO = 'vibechic-device-aes-v1';
+  const TEAM_WRITE_PREFIX = 'vibechic-device-write-v1:';
+
+  function bytesToCrockford(bytes) {
+    let bits = 0, value = 0, out = '';
+    for (let i = 0; i < bytes.length; i++) {
+      value = (value << 8) | bytes[i];
+      bits += 8;
+      while (bits >= 5) {
+        out += CROCKFORD[(value >>> (bits - 5)) & 31];
+        bits -= 5;
+      }
+    }
+    if (bits > 0) out += CROCKFORD[(value << (5 - bits)) & 31];
+    return out;
+  }
+  function crockfordToBytes(str) {
+    const cleaned = String(str || '').toUpperCase().replace(/[^0-9A-Z]/g, '')
+      .replace(/O/g, '0').replace(/[IL]/g, '1');
+    let bits = 0, value = 0;
+    const out = [];
+    for (let i = 0; i < cleaned.length; i++) {
+      const idx = CROCKFORD.indexOf(cleaned[i]);
+      if (idx < 0) throw new Error('bad recovery char');
+      value = (value << 5) | idx;
+      bits += 5;
+      if (bits >= 8) {
+        out.push((value >>> (bits - 8)) & 255);
+        bits -= 8;
+      }
+    }
+    return new Uint8Array(out);
+  }
+  function formatRecoveryCode(crockford) {
+    const s = String(crockford || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+    const parts = [];
+    for (let i = 0; i < s.length; i += 4) parts.push(s.slice(i, i + 4));
+    return parts.join('-');
+  }
+  function parseRecoveryCode(input) {
+    const bytes = crockfordToBytes(input);
+    if (bytes.length < 16) throw new Error('mã quá ngắn');
+    return bytes.slice(0, 16); // use first 16 bytes (>=128-bit)
+  }
+
+  function generateDeviceKeyBytes() {
+    return randomBytes(16); // 128-bit
+  }
+
+  async function deviceIdFromKeyBytes(keyBytes) {
+    const dig = await crypto.subtle.digest('SHA-256', keyBytes);
+    const u8 = new Uint8Array(dig);
+    let hex = '';
+    for (let i = 0; i < u8.length; i++) hex += u8[i].toString(16).padStart(2, '0');
+    return hex;
+  }
+
+  async function deriveDeviceAesKey(keyBytes) {
+    const base = await crypto.subtle.importKey('raw', keyBytes, 'HKDF', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt: new TextEncoder().encode('vibechic-device-salt-v1'),
+        info: new TextEncoder().encode(DEVICE_HKDF_INFO)
+      },
+      base,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  }
+
+  async function deriveTeamWriteToken(teamPassword) {
+    const dig = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(TEAM_WRITE_PREFIX + teamPassword)
+    );
+    const u8 = new Uint8Array(dig);
+    let hex = '';
+    for (let i = 0; i < u8.length; i++) hex += u8[i].toString(16).padStart(2, '0');
+    return hex;
+  }
+
   global.VCCrypto = {
     KDF_ITERATIONS, META_FILE, IV_BYTES, VERIFIER_PLAINTEXT,
+    TEAM_WRITE_PREFIX,
     b64encode, b64decode, randomBytes,
     deriveKey, encryptBytes, decryptBytes, encryptText, decryptText,
-    isEncryptedEnvelope, newMeta, makeVerifier, checkVerifier
+    isEncryptedEnvelope, newMeta, makeVerifier, checkVerifier,
+    generateDeviceKeyBytes, formatRecoveryCode, parseRecoveryCode,
+    deviceIdFromKeyBytes, deriveDeviceAesKey, deriveTeamWriteToken,
+    bytesToCrockford, crockfordToBytes
   };
 })(typeof window !== 'undefined' ? window : globalThis);

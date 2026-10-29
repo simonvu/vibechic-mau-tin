@@ -1,21 +1,17 @@
-VibeChic Mẫu tin — phone PWA v10.1
+VibeChic Mẫu tin — phone PWA v11
 
-Data source (encrypted):
-  https://vibechic-admin.tusinh-information.workers.dev/public/templates.json
-  https://vibechic-admin.tusinh-information.workers.dev/public/crypto-meta.json
-  images: .../public/images/...
+Team data (encrypted):
+  https://vibechic-admin.tusinh-information.workers.dev/public/...
 
-On first open (when crypto-meta present): enter team password once.
-Key stored in IndexedDB (non-extractable CryptoKey) keyed by passwordId.
+Per-device private cloud:
+  https://vibechic-admin.tusinh-information.workers.dev/device/snapshot
+  https://vibechic-admin.tusinh-information.workers.dev/device/image/<id>
+  Auth: Authorization Bearer <sha256(deviceKey)>
+  Writes also need X-VC-Team-Token (derived after team password unlock)
+  Client encrypts with AES-GCM from device recovery key (HKDF)
 
-Admin (online):
-  https://vibechic-admin.tusinh-information.workers.dev/
-  Login: simonvu + admin password
-  Team password: once per browser session (verified vs crypto-meta verifier), client-side AES-GCM publish
+Settings → Mã khôi phục (copy) / Khôi phục từ mã
+Auto-save personal products + pins after local edits (debounced)
 
-GitHub public repo simonvu/vibechic-mau-tin:
-  Replace plaintext templates.json with encrypted stub (see /workspace/vibechic-github-stub/).
-  Do not keep admin sources in the public repo.
-
-Install on iPhone: AirDrop/Files open index.html in Safari → Share → Add to Home Screen
-  Or unzip vibechic-templates-v10.zip and host statically (HTTPS).
+Admin: https://vibechic-admin.tusinh-information.workers.dev/
+SW cache: vibechic-templates-v11

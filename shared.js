@@ -179,6 +179,10 @@
       pinned: !!raw.pinned,
       pinOrder: raw.pinned ? (raw.pinOrder != null ? Number(raw.pinOrder) : 0) : null,
       personal: !!raw.personal,
+      teamShared: !!raw.teamShared || raw.source === 'team',
+      source: raw.source || (raw.personal ? 'personal' : (raw.teamShared ? 'team' : 'admin')),
+      authorDeviceId: raw.authorDeviceId || null,
+      authorName: raw.authorName || '',
       createdAt: raw.createdAt || Date.now(),
       updatedAt: raw.updatedAt || Date.now()
     };

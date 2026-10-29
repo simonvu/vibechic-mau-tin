@@ -63,8 +63,11 @@
       </details>
 
       <p id="teamPinHint" hidden style="color:var(--muted);font-size:0.85rem;margin:0 0 8px">📌 Admin đã ghim sản phẩm này (Đang hot cho cả đội).</p>
+      <p id="authorByline" hidden style="color:var(--muted);font-size:0.85rem;margin:0 0 8px"></p>
       <div class="sheet-actions" style="flex-direction:column;gap:8px">
         <button type="button" class="btn btn-secondary" id="btnLocalPin" style="width:100%">📌 Ghim trên máy này</button>
+        <button type="button" class="btn btn-ghost" id="btnHideItem" style="width:100%" hidden>🙈 Ẩn (chỉ mình tôi)</button>
+        <button type="button" class="btn btn-ghost" id="btnMovePersonal" style="width:100%" hidden>↩️ Chuyển về chỉ mình tôi</button>
         <div style="display:flex;gap:8px;width:100%">
           <button type="button" class="btn btn-ghost" id="btnEdit" style="flex:1">✏️ Sửa</button>
           <button type="button" class="btn btn-danger" id="btnDelete" style="flex:1">🗑️ Xóa SP</button>
@@ -103,6 +106,21 @@
             <button type="button" class="btn btn-secondary" id="btnAddVariant" style="padding:8px 12px">＋ Thêm mẫu</button>
           </div>
           <div id="editVariants"></div>
+        </div>
+
+        <div class="field" id="editShareScopeField">
+          <label>Phạm vi lưu</label>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
+            <label style="display:flex;gap:8px;align-items:center;font-weight:500">
+              <input type="radio" name="editShareScope" id="scopePersonal" value="personal" checked />
+              Chỉ mình tôi <span style="color:var(--muted);font-weight:400">(cloud riêng máy)</span>
+            </label>
+            <label style="display:flex;gap:8px;align-items:center;font-weight:500">
+              <input type="radio" name="editShareScope" id="scopeTeam" value="team" />
+              Đẩy cho team <span style="color:var(--muted);font-weight:400">(mọi máy đội thấy)</span>
+            </label>
+          </div>
+          <p style="margin:8px 0 0;font-size:0.8rem;color:var(--muted)">Mẫu đội cần mật khẩu đội. Bạn có thể sửa/xóa mục mình đã đẩy.</p>
         </div>
 
         <div class="sheet-actions">
@@ -144,6 +162,17 @@
       <div class="settings-block">
         <h3>Cài lên Màn hình chính</h3>
         <p>Safari → Chia sẻ → <b>Thêm vào Màn hình chính</b>. Đồng bộ mẫu đội từ Cloudflare (cần mật khẩu đội). Cloud riêng máy dùng mã khôi phục.</p>
+      </div>
+      <div class="settings-block">
+        <h3>Tên của bạn</h3>
+        <p>Hiện kèm mẫu bạn đẩy cho team (vd. by Lan).</p>
+        <input type="text" id="staffDisplayName" maxlength="40" placeholder="VD: Lan" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);box-sizing:border-box;margin:6px 0" />
+        <button type="button" class="btn btn-secondary" id="btnSaveDisplayName">Lưu tên</button>
+      </div>
+      <div class="settings-block">
+        <h3>Mẫu đã ẩn</h3>
+        <p>Ẩn chỉ trên máy bạn — không ảnh hưởng người khác. Bấm hiện lại để thấy trên danh sách.</p>
+        <div id="hiddenItemsList" style="font-size:0.9rem"></div>
       </div>
       <div class="settings-block">
         <h3>Đồng bộ mẫu đội (cloud chung)</h3>
@@ -222,6 +251,7 @@
   <script src="shared.js"></script>
   <script src="crypto.js"></script>
   <script src="device-cloud.js"></script>
+  <script src="team-share.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

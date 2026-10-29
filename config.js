@@ -1,4 +1,4 @@
-/* Sync config — Cloudflare Worker public + per-device private cloud */
+/* Sync config — Cloudflare Worker public + device + team share */
 window.VC_CONFIG = {
   githubOwner: 'simonvu',
   githubRepo: 'vibechic-mau-tin',
@@ -8,6 +8,7 @@ window.VC_CONFIG = {
   cryptoMetaUrl: 'https://vibechic-admin.tusinh-information.workers.dev/public/crypto-meta.json',
   mediaBaseUrl: 'https://vibechic-admin.tusinh-information.workers.dev/public/',
   deviceBaseUrl: 'https://vibechic-admin.tusinh-information.workers.dev/device',
+  teamBaseUrl: 'https://vibechic-admin.tusinh-information.workers.dev/team',
   templatesRawUrl: 'https://simonvu.github.io/vibechic-mau-tin/templates.json',
   cryptoMetaRawUrl: 'https://simonvu.github.io/vibechic-mau-tin/crypto-meta.json',
   pagesAppUrl: 'https://simonvu.github.io/vibechic-mau-tin/',

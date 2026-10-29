@@ -26,6 +26,9 @@
   let teamPasswordId = null;
   let unlockResolved = false;
   let localPins = {}; // { [productId]: pinOrderNumber } personal pins
+  let hiddenIds = {}; // { [productId]: true } personal hide of team/admin items
+  let myDeviceId = null;
+  let staffDisplayName = '';
 
   function toast(msg) {
     const el = $('#toast');
@@ -228,6 +231,45 @@
   async function saveLocalPins() {
     await setMeta('localPins', localPins);
   }
+  async function loadHiddenIds() {
+    const v = await getMeta('hiddenIds');
+    hiddenIds = (v && typeof v === 'object') ? v : {};
+  }
+  async function saveHiddenIds() {
+    await setMeta('hiddenIds', hiddenIds);
+  }
+  async function loadStaffDisplayName() {
+    staffDisplayName = (await getMeta('staffDisplayName')) || '';
+  }
+  async function saveStaffDisplayName(name) {
+    staffDisplayName = String(name || '').trim().slice(0, 40);
+    await setMeta('staffDisplayName', staffDisplayName);
+  }
+  async function ensureMyDeviceId() {
+    if (!window.VCDeviceCloud) return null;
+    const dev = await VCDeviceCloud.ensureDeviceKey(getMeta, setMeta);
+    myDeviceId = dev.id;
+    return myDeviceId;
+  }
+  function isHidden(id) { return !!(id && hiddenIds[id]); }
+  function sourceLabel(p) {
+    if (!p) return '';
+    if (p.personal) return 'của tôi';
+    if (p.teamShared || p.source === 'team') {
+      const by = (p.authorName || '').trim();
+      return by ? ('team · by ' + by) : 'team';
+    }
+    return 'admin';
+  }
+  function canEditProduct(p) {
+    if (!p) return false;
+    if (p.personal) return true;
+    if (p.teamShared || p.source === 'team') {
+      return !!(myDeviceId && p.authorDeviceId && p.authorDeviceId === myDeviceId);
+    }
+    return false; // admin pack — staff shouldn't edit on phone
+  }
+
   function isHot(p) {
     return !!(p && (p.pinned || localPins[p.id] != null));
   }
@@ -276,6 +318,8 @@
   function filtered() {
     const q = searchQuery.trim().toLowerCase();
     return sortedProducts().filter((p) => {
+      if (isHidden(p.id) && !(p.personal && !p.teamShared)) return false; // hide team/admin for self; personal never "hidden" this way
+      if (isHidden(p.id)) return false;
       if (activeCategory !== 'Tất cả' && (p.category || 'Khác') !== activeCategory) return false;
       if (!q) return true;
       const blob = [p.title, p.category, ...(p.variants || []).map((v) => v.label + ' ' + htmlToPlain(v.html))]
@@ -326,7 +370,7 @@
           <div class="card-thumb-wrap">${cardThumbHtml(p)}</div>
           <div class="card-body">
             <div class="title">${isHot(p) ? '<span class="pin-badge" aria-hidden="true">📌</span> ' : ''}${escapeHtml(p.title)}</div>
-            <div class="meta">${escapeHtml(p.category || 'Khác')} · ${(p.images||[]).length} ảnh${pinLabel}</div>
+            <div class="meta">${escapeHtml(p.category || 'Khác')} · ${(p.images||[]).length} ảnh · ${escapeHtml(sourceLabel(p))}${pinLabel}</div>
             <div class="badge">${n} mẫu câu</div>
             <div class="preview">${preview}</div>
           </div>
@@ -360,7 +404,7 @@
     const pinBits = [];
     if (p.pinned) pinBits.push('ghim đội');
     if (localPins[p.id] != null) pinBits.push('ghim máy');
-    $('#detailMeta').textContent = `${p.category || 'Khác'} · ${(p.images||[]).length} ảnh · ${p.variants.length} mẫu${pinBits.length ? ' · 📌 ' + pinBits.join(', ') : ''}`;
+    $('#detailMeta').textContent = `${p.category || 'Khác'} · ${(p.images||[]).length} ảnh · ${p.variants.length} mẫu · ${sourceLabel(p)}${pinBits.length ? ' · 📌 ' + pinBits.join(', ') : ''}`;
     const pinBtn = $('#btnLocalPin');
     if (pinBtn) {
       const on = localPins[p.id] != null;
@@ -369,6 +413,32 @@
     }
     const teamPin = $('#teamPinHint');
     if (teamPin) teamPin.hidden = !p.pinned;
+    const by = $('#authorByline');
+    if (by) {
+      if ((p.teamShared || p.source === 'team') && (p.authorName || p.authorDeviceId)) {
+        by.hidden = false;
+        by.textContent = p.authorName ? ('by ' + p.authorName) : ('by thiết bị ' + String(p.authorDeviceId || '').slice(0, 8));
+      } else {
+        by.hidden = true;
+        by.textContent = '';
+      }
+    }
+    const editable = canEditProduct(p);
+    const isTeamOrAdmin = !p.personal || p.teamShared || p.source === 'team' || p.source === 'admin' || (!p.personal && !p.teamShared);
+    // Hide button: for non-personal (team/admin) items
+    const hideBtn = $('#btnHideItem');
+    if (hideBtn) {
+      const showHide = !p.personal || !!p.teamShared;
+      hideBtn.hidden = !showHide;
+    }
+    const moveBtn = $('#btnMovePersonal');
+    if (moveBtn) {
+      moveBtn.hidden = !(editable && (p.teamShared || p.source === 'team'));
+    }
+    const editBtn = $('#btnEdit');
+    const delBtn = $('#btnDelete');
+    if (editBtn) editBtn.style.display = editable ? '' : 'none';
+    if (delBtn) delBtn.style.display = editable ? '' : 'none';
     $('#unicodeToggle').checked = unicodePrefer;
 
     const vbox = $('#variantList');
@@ -449,6 +519,16 @@
     $('#editTitle').textContent = p ? 'Sửa sản phẩm' : 'Thêm sản phẩm';
     $('#editTitleInput').value = p ? p.title : '';
     $('#editCategory').value = p ? (p.category || '') : 'Tư vấn sản phẩm';
+    const scopeTeam = !!(p && (p.teamShared || p.source === 'team'));
+    const rPers = $('#scopePersonal');
+    const rTeam = $('#scopeTeam');
+    if (rPers && rTeam) {
+      rPers.checked = !scopeTeam;
+      rTeam.checked = scopeTeam;
+      // Admin-owned items shouldn't be re-scoped here (not editable anyway)
+      const field = $('#editShareScopeField');
+      if (field) field.hidden = !!(p && !p.personal && !p.teamShared && p.source === 'admin');
+    }
     if (p && p.images) {
       editImages = p.images.map((im) => ({
         id: im.id || uid(),
@@ -568,7 +648,10 @@
     const meta = await fetchCryptoMeta();
     if (!meta) return false; // no remote yet
     await loadLocalPins();
+    await loadHiddenIds();
+    await loadStaffDisplayName();
     await loadTeamKeyFromDB();
+    try { await ensureMyDeviceId(); } catch (_) {}
     if (teamKey && teamPasswordId && teamPasswordId === meta.passwordId) return true;
     // password changed or missing
     await clearTeamKey();
@@ -661,6 +744,7 @@
         // Shared team sync must not clobber personal products
         const prev = byId.get(inc.id);
         if (prev && prev.personal && !inc.personal) continue;
+        if (prev && prev.teamShared && !(inc.teamShared || inc.source === 'team')) continue;
         const localOnly = prev ? (prev.images || []).filter((im) => im.source === 'local') : [];
         const syncedIn = [];
         for (const im of (inc.images || [])) {
@@ -689,6 +773,10 @@
           variants,
           images: [...syncedIn, ...localOnly],
           personal: !!(inc.personal || (prev && prev.personal)),
+          teamShared: !!(inc.teamShared || inc.source === 'team' || (prev && prev.teamShared)),
+          source: inc.source || (prev && prev.source) || 'admin',
+          authorDeviceId: inc.authorDeviceId || (prev && prev.authorDeviceId) || null,
+          authorName: inc.authorName || (prev && prev.authorName) || '',
           pinned: !!inc.pinned,
           pinOrder: inc.pinned ? (inc.pinOrder != null ? Number(inc.pinOrder) : 0) : null,
           createdAt: prev ? prev.createdAt : (inc.createdAt || Date.now()),
@@ -736,14 +824,31 @@
       return false;
     }
     const list = parseImportList(data);
+    // Tag admin source
+    for (const p of list) {
+      if (p && !p.personal && !p.teamShared) p.source = p.source || 'admin';
+    }
     if (list.length) {
       await mergeProducts(list, { replace: false });
-      await setMeta('lastSync', Date.now());
-      $('#syncStatus').textContent = 'Đã đồng bộ';
-      return true;
     }
-    $('#syncStatus').textContent = 'Chưa có data';
-    return false;
+    // Merge team-contributed items
+    try {
+      if (teamKey && window.VCTeamShare) {
+        const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
+        if (tok) {
+          const teamList = await VCTeamShare.pullAllTeamProducts({ teamKey, teamToken: tok });
+          if (teamList.length) {
+            // Remove local copies of team ids that vanished? keep simple: merge upsert
+            await mergeProducts(teamList.map((p) => ({ ...p, teamShared: true, source: 'team', personal: false })), { replace: false });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('team pull', e);
+    }
+    await setMeta('lastSync', Date.now());
+    $('#syncStatus').textContent = 'Đã đồng bộ';
+    return true;
   }
 
   async function ensureSeed() {
@@ -767,12 +872,12 @@
   function queueDeviceCloudSave() {
     if (!window.VCDeviceCloud) return;
     VCDeviceCloud.scheduleUpload({
-      getMeta, setMeta, products, localPins,
+      getMeta, setMeta, products, localPins, hiddenIds,
       onStatus: setDeviceCloudStatus
     });
   }
 
-  async function mergePersonalFromCloud(incomingProducts, incomingPins, overlays) {
+  async function mergePersonalFromCloud(incomingProducts, incomingPins, overlays, incomingHidden) {
     for (const raw of (incomingProducts || [])) {
       const inc = migrateProduct({ ...raw, personal: true });
       if (!inc) continue;
@@ -808,6 +913,12 @@
       localPins = { ...localPins, ...incomingPins };
       await saveLocalPins();
     }
+    if (Array.isArray(incomingHidden)) {
+      const next = { ...hiddenIds };
+      for (const id of incomingHidden) if (id) next[id] = true;
+      hiddenIds = next;
+      await saveHiddenIds();
+    }
     products = await getAll();
     refresh();
   }
@@ -836,10 +947,46 @@
       const card = e.target.closest('.card'); if (card) openDetail(card.dataset.id);
     });
     $('#btnAdd').onclick = () => openEditor(null);
+    function renderHiddenList() {
+      const box = $('#hiddenItemsList');
+      if (!box) return;
+      const ids = Object.keys(hiddenIds).filter((id) => hiddenIds[id]);
+      if (!ids.length) {
+        box.innerHTML = '<p style="color:var(--muted);margin:0">Không có mẫu ẩn.</p>';
+        return;
+      }
+      box.innerHTML = ids.map((id) => {
+        const p = products.find((x) => x.id === id);
+        const title = p ? p.title : id;
+        return `<div style="display:flex;gap:8px;align-items:center;margin:6px 0">
+          <span style="flex:1">${escapeHtml(title)}</span>
+          <button type="button" class="btn btn-ghost" data-unhide="${escapeHtml(id)}">Hiện lại</button>
+        </div>`;
+      }).join('');
+      box.querySelectorAll('[data-unhide]').forEach((btn) => {
+        btn.onclick = async () => {
+          const id = btn.getAttribute('data-unhide');
+          delete hiddenIds[id];
+          await saveHiddenIds();
+          renderHiddenList();
+          refresh();
+          toast('Đã hiện lại');
+          queueDeviceCloudSave();
+        };
+      });
+    }
     $('#btnSettings').onclick = () => {
       $('#defaultUnicode').checked = unicodePrefer;
+      const nameEl = $('#staffDisplayName');
+      if (nameEl) nameEl.value = staffDisplayName || '';
+      renderHiddenList();
       refreshRecoveryUI();
       showOverlay('#settingsOverlay');
+    };
+    const btnSaveName = $('#btnSaveDisplayName');
+    if (btnSaveName) btnSaveName.onclick = async () => {
+      await saveStaffDisplayName(($('#staffDisplayName').value || '').trim());
+      toast(staffDisplayName ? ('Đã lưu tên: ' + staffDisplayName) : 'Đã xóa tên');
     };
     const btnCopyRec = $('#btnCopyRecovery');
     if (btnCopyRec) btnCopyRec.onclick = async () => {
@@ -873,7 +1020,7 @@
     const btnUp = $('#btnUploadDeviceCloud');
     if (btnUp) btnUp.onclick = async () => {
       const r = await VCDeviceCloud.uploadPersonalCloud({
-        getMeta, setMeta, products, localPins,
+        getMeta, setMeta, products, localPins, hiddenIds,
         onStatus: setDeviceCloudStatus
       });
       toast(r.ok ? 'Đã lưu cloud cá nhân' : (r.needTeam ? 'Cần mật khẩu đội trước' : 'Lưu cloud thất bại'));
@@ -889,6 +1036,43 @@
       if (!currentId) return;
       await toggleLocalPin(currentId);
     };
+    const btnHide = $('#btnHideItem');
+    if (btnHide) btnHide.onclick = async () => {
+      if (!currentId) return;
+      hiddenIds[currentId] = true;
+      await saveHiddenIds();
+      hideOverlay('#detailOverlay');
+      refresh();
+      toast('Đã ẩn (chỉ mình bạn)');
+      queueDeviceCloudSave();
+    };
+    const btnMove = $('#btnMovePersonal');
+    if (btnMove) btnMove.onclick = async () => {
+      if (!currentId) return;
+      const p = products.find((x) => x.id === currentId);
+      if (!p || !canEditProduct(p)) { toast('Không có quyền'); return; }
+      if (!confirm('Gỡ khỏi team và giữ bản riêng trên máy bạn?')) return;
+      try {
+        await ensureMyDeviceId();
+        const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
+        await VCTeamShare.deleteTeamItem({ itemId: p.id, deviceId: myDeviceId, teamToken: tok });
+      } catch (e) {
+        toast(e.message || 'Không gỡ team được');
+        return;
+      }
+      await putProduct({
+        ...p,
+        personal: true,
+        teamShared: false,
+        source: 'personal',
+        updatedAt: Date.now()
+      });
+      products = await getAll();
+      hideOverlay('#detailOverlay');
+      refresh();
+      toast('Đã chuyển về chỉ mình tôi');
+      queueDeviceCloudSave();
+    };
     $('#btnEdit').onclick = () => {
       const p = products.find((x) => x.id === currentId);
       hideOverlay('#detailOverlay');
@@ -896,6 +1080,17 @@
     };
     $('#btnDelete').onclick = async () => {
       if (!currentId || !confirm('Xóa sản phẩm này và mọi mẫu câu?')) return;
+      const doomed = products.find((x) => x.id === currentId);
+      if (doomed && (doomed.teamShared || doomed.source === 'team')) {
+        try {
+          await ensureMyDeviceId();
+          const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
+          await VCTeamShare.deleteTeamItem({ itemId: currentId, deviceId: myDeviceId, teamToken: tok });
+        } catch (e) {
+          toast(e.message || 'Không xóa được trên team');
+          return;
+        }
+      }
       await deleteProduct(currentId);
       products = await getAll();
       hideOverlay('#detailOverlay');
@@ -1078,26 +1273,72 @@
         path: im.path || null,
         hash: im.hash || null
       });
-      const isPersonal = !prev || !!prev.personal || !prev.pinned; // new or already personal → personal cloud
-      // Staff additions (new products) are always personal; editing a team product keeps team ownership
-      // unless it was already personal.
-      const personalFlag = prev ? !!prev.personal : true;
-      await putProduct({
+      const wantTeam = !!( $('#scopeTeam') && $('#scopeTeam').checked );
+      let personalFlag = !wantTeam;
+      let teamShared = wantTeam;
+      let authorDeviceId = prev && prev.authorDeviceId;
+      let authorName = prev && prev.authorName;
+      if (wantTeam) {
+        await ensureMyDeviceId();
+        if (!myDeviceId) { toast('Không tạo được mã máy'); return; }
+        if (!staffDisplayName) {
+          const n = prompt('Tên của bạn (hiện by … trên mẫu team):', staffDisplayName || '');
+          if (n == null) return;
+          await saveStaffDisplayName(n);
+          if (!staffDisplayName) { toast('Cần tên để đẩy team'); return; }
+        }
+        if (!teamKey) {
+          const ok = await ensureUnlockedForSync();
+          if (!ok || !teamKey) { toast('Cần mật khẩu đội để đẩy team'); return; }
+        }
+        authorDeviceId = (prev && prev.authorDeviceId) || myDeviceId;
+        if (prev && prev.authorDeviceId && prev.authorDeviceId !== myDeviceId) {
+          toast('Không phải chủ mẫu — không sửa được'); return;
+        }
+        authorName = staffDisplayName;
+      }
+
+      const product = {
         id, title,
         category: $('#editCategory').value.trim() || 'Khác',
         variants, images,
         pinned: prev ? !!prev.pinned : false,
         pinOrder: prev && prev.pinned ? prev.pinOrder : null,
         personal: personalFlag,
+        teamShared: teamShared,
+        source: wantTeam ? 'team' : 'personal',
+        authorDeviceId: authorDeviceId || null,
+        authorName: authorName || '',
         sortOrder: prev ? prev.sortOrder : products.length,
         createdAt: prev ? prev.createdAt : Date.now(),
         updatedAt: Date.now()
-      });
+      };
+
+      if (wantTeam) {
+        try {
+          const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
+          const r = await VCTeamShare.pushTeamItem({
+            product, teamKey, teamToken: tok, deviceId: myDeviceId, authorName: staffDisplayName
+          });
+          Object.assign(product, r.product || {}, { personal: false, teamShared: true, source: 'team' });
+          toast('Đã đẩy cho team ✓');
+        } catch (e) {
+          toast(e.message || 'Đẩy team thất bại');
+          return;
+        }
+      }
+
+      await putProduct(product);
       products = await getAll();
       hideOverlay('#editOverlay');
       refresh();
-      toast(personalFlag ? 'Đã lưu (cloud riêng máy)' : 'Đã lưu sản phẩm');
-      if (personalFlag) queueDeviceCloudSave();
+      if (!wantTeam) {
+        toast('Đã lưu (chỉ mình tôi)');
+        queueDeviceCloudSave();
+      } else {
+        // Remove from personal-only cloud footprint: already marked not personal
+        queueDeviceCloudSave();
+      }
     });
 
     $('#btnExport').onclick = () => {

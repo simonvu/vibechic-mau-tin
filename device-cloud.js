@@ -96,7 +96,7 @@
     return 'data:image/jpeg;base64,' + b64encode(bytes);
   }
 
-  async function buildPersonalSnapshot(products, localPins) {
+  async function buildPersonalSnapshot(products, localPins, hiddenIds) {
     const imagePayloads = []; // { id, bytes }
     function packImage(im, j) {
       const id = im.id || ('img-' + j);
@@ -138,6 +138,7 @@
         kind: 'device-personal',
         updatedAt: new Date().toISOString(),
         localPins: localPins || {},
+        hiddenIds: Array.isArray(hiddenIds) ? hiddenIds : (hiddenIds && typeof hiddenIds === 'object' ? Object.keys(hiddenIds).filter((k) => hiddenIds[k]) : []),
         products: packed,
         localImageOverlays,
         imageIds: imagePayloads.map((x) => x.id)
@@ -146,7 +147,7 @@
     };
   }
 
-  async function uploadPersonalCloud({ getMeta, setMeta, products, localPins, onStatus }) {
+  async function uploadPersonalCloud({ getMeta, setMeta, products, localPins, hiddenIds, onStatus }) {
     if (busy) return { ok: false, skipped: true };
     busy = true;
     try {
@@ -156,7 +157,7 @@
         return { ok: false, needTeam: true };
       }
       const dev = await ensureDeviceKey(getMeta, setMeta);
-      const { snapshot, imagePayloads } = await buildPersonalSnapshot(products, localPins);
+      const { snapshot, imagePayloads } = await buildPersonalSnapshot(products, localPins, hiddenIds);
       onStatus && onStatus('Đang mã hóa / lưu cloud cá nhân…');
 
       for (const img of imagePayloads) {
@@ -275,7 +276,7 @@
         }
         overlays[pid] = list;
       }
-      await mergePersonal(products, snap.localPins || {}, overlays);
+      await mergePersonal(products, snap.localPins || {}, overlays, snap.hiddenIds || []);
       const savedAt = snap.updatedAt ? Date.parse(snap.updatedAt) : Date.now();
       await setMeta(META_CLOUD_AT, savedAt);
       const label = 'Đã khôi phục cloud · cập nhật ' + new Date(savedAt).toLocaleString('vi-VN');

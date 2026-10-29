@@ -788,6 +788,108 @@
     refresh();
   }
 
+
+  function anyOverlayOpen() {
+    // Only .show — avoid false positives from attribute quirks
+    return !!document.querySelector('.overlay.show');
+  }
+
+  function showSwUpdateToast() {
+    const btn = $('#swUpdateToast');
+    if (!btn) return;
+    btn.hidden = false;
+  }
+  function hideSwUpdateToast() {
+    const btn = $('#swUpdateToast');
+    if (!btn) return;
+    btn.hidden = true;
+  }
+
+  async function activateWaitingWorker(reg) {
+    const waiting = reg && reg.waiting;
+    if (!waiting) return false;
+    waiting.postMessage({ type: 'SKIP_WAITING' });
+    return true;
+  }
+
+  let swReloadArmed = false;
+  function armControllerReload() {
+    if (swReloadArmed) return;
+    swReloadArmed = true;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      location.reload();
+    });
+  }
+
+  async function checkServiceWorkerUpdate({ activateIfWaiting } = {}) {
+    if (!('serviceWorker' in navigator)) return { updated: false };
+    try {
+      const reg = await navigator.serviceWorker.getRegistration() ||
+        await navigator.serviceWorker.register('./sw.js');
+      await reg.update();
+      // installing → wait a tick for waiting
+      if (reg.installing) {
+        await new Promise((resolve) => {
+          const w = reg.installing;
+          if (!w) return resolve();
+          w.addEventListener('statechange', () => {
+            if (w.state === 'installed' || w.state === 'activated') resolve();
+          });
+          setTimeout(resolve, 4000);
+        });
+      }
+      if (reg.waiting) {
+        if (activateIfWaiting) {
+          armControllerReload();
+          await activateWaitingWorker(reg);
+          return { updated: true, activating: true };
+        }
+        showSwUpdateToast();
+        return { updated: true, waiting: true };
+      }
+      return { updated: false };
+    } catch (e) {
+      console.warn('sw update', e);
+      return { updated: false, error: String(e && e.message || e) };
+    }
+  }
+
+  async function pullAndMergePersonalCloud() {
+    if (!window.VCDeviceCloud) return;
+    try {
+      await VCDeviceCloud.pullAndMerge({
+        getMeta, setMeta,
+        mergePersonal: mergePersonalFromCloud,
+        onStatus: setDeviceCloudStatus
+      });
+    } catch (e) {
+      console.warn('personal pull', e);
+    }
+  }
+
+  /** Full refresh used by pull-to-refresh: admin templates + team + personal cloud + SW */
+  async function fullPullRefresh() {
+    $('#syncStatus').textContent = 'Đang tải lại…';
+    let ok = false;
+    try {
+      ok = await syncFromGithub();
+    } catch (e) {
+      console.warn(e);
+    }
+    await pullAndMergePersonalCloud();
+    products = await getAll();
+    refresh();
+    const sw = await checkServiceWorkerUpdate({ activateIfWaiting: true });
+    if (sw.activating) {
+      toast('Đang cập nhật bản mới…');
+      // reload via controllerchange
+      return { ok, sw };
+    }
+    $('#syncStatus').textContent = ok ? 'Đã đồng bộ' : ($('#syncStatus').textContent || 'Local');
+    toast(ok ? 'Đã tải lại ✓' : 'Đã thử tải lại');
+    return { ok, sw };
+  }
+
   async function syncFromGithub() {
     $('#syncStatus').textContent = 'Đang đồng bộ…';
     const unlocked = await ensureUnlockedForSync();
@@ -1418,15 +1520,40 @@
     await loadTeamKeyFromDB();
     if ('serviceWorker' in navigator) {
       try {
-        const reg = await navigator.serviceWorker.register('./sw.js');
-        reg.update && reg.update();
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          if (!sessionStorage.getItem('vc-sw-reload')) {
-            sessionStorage.setItem('vc-sw-reload', '1');
-            location.reload();
-          }
-        });
+        await navigator.serviceWorker.register('./sw.js');
+        // Soft check on open — toast if waiting (do not auto-activate)
+        setTimeout(() => { checkServiceWorkerUpdate({ activateIfWaiting: false }); }, 800);
       } catch (_) {}
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        checkServiceWorkerUpdate({ activateIfWaiting: false });
+      }
+    });
+    window.addEventListener('focus', () => {
+      checkServiceWorkerUpdate({ activateIfWaiting: false });
+    });
+    const swBtn = $('#swUpdateToast');
+    if (swBtn) {
+      swBtn.onclick = async () => {
+        hideSwUpdateToast();
+        toast('Đang cập nhật…');
+        armControllerReload();
+        try {
+          const reg = await navigator.serviceWorker.getRegistration();
+          if (reg && reg.waiting) await activateWaitingWorker(reg);
+          else await checkServiceWorkerUpdate({ activateIfWaiting: true });
+        } catch (_) {}
+      };
+    }
+    // Pull-to-refresh (iOS standalone)
+    if (window.VCPullRefresh) {
+      VCPullRefresh.createPullRefresh({
+        indicator: $('#pullRefresh'),
+        labelEl: $('#pullRefreshLabel'),
+        isBlocked: () => anyOverlayOpen(),
+        onRefresh: () => fullPullRefresh()
+      });
     }
     // Ensure device key exists (recovery code)
     try { await VCDeviceCloud.ensureDeviceKey(getMeta, setMeta); } catch (_) {}

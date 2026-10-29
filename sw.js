@@ -1,4 +1,4 @@
-const CACHE = 'vibechic-templates-v12';
+const CACHE = 'vibechic-templates-v13';
 const ASSETS = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const ASSETS = [
   './crypto.js',
   './device-cloud.js',
   './team-share.js',
+  './pull-refresh.js',
   './config.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
@@ -20,7 +21,8 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // Cache new assets but do NOT auto-activate — wait for user tap / pull-to-refresh
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
 });
 
 self.addEventListener('activate', (e) => {
@@ -29,6 +31,12 @@ self.addEventListener('activate', (e) => {
       Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
+});
+
+self.addEventListener('message', (e) => {
+  if (e && e.data && (e.data === 'SKIP_WAITING' || e.data.type === 'SKIP_WAITING')) {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('fetch', (e) => {

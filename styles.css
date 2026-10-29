@@ -379,3 +379,65 @@ img { max-width: 100%; display: block; }
 }
 .pin-badge { font-size: 0.95rem; }
 #btnLocalPin.pin-on { background: #F0DAC5; border-color: #C4A484; }
+
+
+/* Pull-to-refresh (iOS standalone PWA) */
+.pull-refresh {
+  height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  pointer-events: none;
+  transition: height 0.18s ease;
+}
+.pull-refresh.visible {
+  transition: none;
+}
+.pull-refresh.refreshing {
+  height: 52px !important;
+  transition: height 0.18s ease;
+}
+.pull-refresh-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 6px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.pull-spinner {
+  width: 16px; height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--pink);
+  border-radius: 50%;
+  opacity: 0.35;
+}
+.pull-refresh.ready .pull-spinner,
+.pull-refresh.refreshing .pull-spinner {
+  opacity: 1;
+}
+.pull-refresh.refreshing .pull-spinner {
+  animation: vc-spin 0.7s linear infinite;
+}
+@keyframes vc-spin { to { transform: rotate(360deg); } }
+
+.sw-update-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(18px + var(--safe-bottom));
+  transform: translateX(-50%);
+  z-index: 80;
+  background: #1a1a1a;
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 12px 18px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.22);
+  max-width: calc(100vw - 32px);
+  white-space: nowrap;
+}
+.sw-update-toast[hidden] { display: none !important; }

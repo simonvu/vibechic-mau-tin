@@ -29,8 +29,15 @@
   </header>
 
   <div class="chips" id="categoryChips"></div>
+  <div id="pullRefresh" class="pull-refresh" aria-hidden="true">
+    <div class="pull-refresh-inner">
+      <span class="pull-spinner" aria-hidden="true"></span>
+      <span id="pullRefreshLabel">Kéo để tải lại</span>
+    </div>
+  </div>
   <main class="list" id="productList"></main>
   <div class="toast" id="toast" role="status"></div>
+  <button type="button" id="swUpdateToast" class="sw-update-toast" hidden>Có bản mới – chạm để cập nhật</button>
 
   <!-- Product detail -->
   <div class="overlay" id="detailOverlay" hidden>
@@ -252,6 +259,7 @@
   <script src="crypto.js"></script>
   <script src="device-cloud.js"></script>
   <script src="team-share.js"></script>
+  <script src="pull-refresh.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

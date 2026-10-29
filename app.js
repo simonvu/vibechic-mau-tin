@@ -32,7 +32,6 @@
   let multiSelectMode = false;
   let selectedImageIdx = new Set(); // indices into product.images
   let preparedShareFiles = new Map(); // idx -> File (ready for sync share)
-  let shareWithMessage = localStorage.getItem('vc-share-msg') === '1';
 
 
   function toast(msg) {
@@ -268,59 +267,108 @@
     return true;
   }
 
-  function updateMultiShareBar() {
+  function variantTabLabel(v, i) {
+    const lab = String((v && v.label) || '').trim();
+    if (!lab) return 'Câu ' + (i + 1);
+    const generic = /^(mẫu(\s|$)|tin\s|mẫu chính|mẫu mới)/i.test(lab);
+    if (generic) return 'Câu ' + (i + 1);
+    return lab.length > 18 ? lab.slice(0, 16) + '…' : lab;
+  }
+
+  function selectedVariant(p) {
+    if (!p) return null;
+    return (p.variants || []).find((x) => x.id === selectedVariantId) || (p.variants || [])[0] || null;
+  }
+
+  function selectedVariantLabel(p) {
+    const vars = (p && p.variants) || [];
+    const v = selectedVariant(p);
+    if (!v) return '—';
+    const i = Math.max(0, vars.findIndex((x) => x.id === v.id));
+    return variantTabLabel(v, i);
+  }
+
+  function updateSendFlowUI(p) {
     const bar = $('#multiShareBar');
-    const toggleBtn = $('#btnToggleMultiSelect');
+    const idle = $('#sendFlowIdle');
     const shareBtn = $('#btnShareSelectedImages');
+    const saveBtn = $('#btnSaveImagesShare');
     const countEl = $('#multiShareCount');
-    const msgToggle = $('#shareWithMessage');
-    if (!bar || !toggleBtn) return;
-    bar.hidden = !multiSelectMode;
-    toggleBtn.textContent = multiSelectMode ? '✕ Hủy chọn nhiều' : '☑️ Chọn nhiều ảnh';
+    const will = $('#sendWillCopy');
+    const startBtn = $('#btnStartSend');
+    if (!bar) return;
+    const inSend = !!multiSelectMode;
+    bar.hidden = !inSend;
+    if (idle) idle.hidden = inSend || !(p && (p.images || []).length);
+    if (startBtn) startBtn.hidden = !(p && (p.images || []).length);
+    if (will) will.textContent = 'Sẽ copy: ' + selectedVariantLabel(p);
     const n = selectedImageIdx.size;
     let ready = 0;
     for (const i of selectedImageIdx) if (preparedShareFiles.has(i)) ready++;
     if (countEl) {
       countEl.textContent = n
-        ? (ready < n ? (ready + '/' + n + ' sẵn sàng') : (n + ' đã chọn'))
-        : '0 đã chọn';
+        ? (ready < n ? (ready + '/' + n + ' sẵn sàng') : (n + ' ảnh đã chọn'))
+        : '0 ảnh';
     }
+    const ok = n > 0 && ready >= n;
     if (shareBtn) {
-      // Only enable when every selected file is already prepared (iOS user-activation)
-      shareBtn.disabled = n === 0 || ready < n;
-      shareBtn.textContent = 'Chia sẻ (' + n + ') ảnh';
+      shareBtn.disabled = !ok;
+      shareBtn.textContent = ok ? ('Chia sẻ · ' + n + ' ảnh') : 'Chia sẻ';
     }
-    if (msgToggle) msgToggle.checked = !!shareWithMessage;
+    if (saveBtn) {
+      saveBtn.disabled = !ok;
+    }
+  }
+
+  function renderVariantTabs(p) {
+    const tabs = $('#variantTabs');
+    const preview = $('#variantPreview');
+    const vars = p.variants || [];
+    if (!tabs || !preview) return;
+    if (!vars.length) {
+      tabs.innerHTML = '';
+      preview.innerHTML = '<span style="color:var(--muted)">Chưa có câu</span>';
+      return;
+    }
+    if (!selectedVariantId || !vars.some((v) => v.id === selectedVariantId)) {
+      selectedVariantId = vars[0].id;
+    }
+    tabs.innerHTML = vars.map((v, i) => {
+      const active = v.id === selectedVariantId;
+      return `<button type="button" class="variant-tab${active ? ' active' : ''}" role="tab" aria-selected="${active ? 'true' : 'false'}" data-vid="${escapeHtml(v.id)}">${escapeHtml(variantTabLabel(v, i))}</button>`;
+    }).join('');
+    const v = selectedVariant(p);
+    preview.innerHTML = (v && v.html) ? v.html : '<span style="color:var(--muted)">Trống</span>';
   }
 
   function renderDetailImages(p) {
+    const box = $('#imageCopyActions');
+    if (!box) return;
     const imgs = p.images || [];
-    const synced = imgs.filter((im) => im.source !== 'local');
-    const locals = imgs.filter((im) => im.source === 'local');
-    const renderImgRow = (im, i) => {
+    if (!imgs.length) {
+      box.innerHTML = '<p style="color:var(--muted);font-size:0.9rem;grid-column:1/-1">Chưa có ảnh</p>';
+      updateSendFlowUI(p);
+      return;
+    }
+    box.innerHTML = imgs.map((im, i) => {
       const selected = selectedImageIdx.has(i);
+      const personal = im.source === 'local';
       const selClass = multiSelectMode ? ('select-mode' + (selected ? ' selected' : '')) : '';
       const check = multiSelectMode
         ? `<span class="img-check" aria-hidden="true">${selected ? '✓' : ''}</span>`
         : '';
-      return `
-      <div class="image-copy-item ${selClass}" data-img-idx="${i}" role="${multiSelectMode ? 'checkbox' : 'group'}" aria-checked="${selected ? 'true' : 'false'}">
-        ${check}
-        <img src="${im.dataURL || imagePublicUrl(im) || ''}" alt="Ảnh ${i + 1}" />
-        <button type="button" class="btn btn-secondary btn-copy-single" data-copy-img="${i}">🖼️ Copy ảnh${im.source === 'local' ? ' <span class="tag-local">local</span>' : ''}</button>
-        ${multiSelectMode ? `<span style="flex:1;font-size:0.9rem;font-weight:600">Ảnh ${i + 1}${selected ? ' · đã chọn' : ''}</span>` : ''}
+      const badge = personal ? '<span class="badge-rieng">riêng mình</span>' : '';
+      const src = im.dataURL || imagePublicUrl(im) || '';
+      return `<div class="img-tile ${selClass}" data-img-idx="${i}" role="${multiSelectMode ? 'checkbox' : 'group'}" aria-checked="${selected ? 'true' : 'false'}">
+        ${badge}${check}
+        <img src="${src}" alt="Ảnh ${i + 1}" />
+        <button type="button" class="btn-copy-mini" data-copy-img="${i}">Copy</button>
       </div>`;
-    };
-    $('#imageCopyActions').innerHTML =
-      (synced.length ? `<div class="section-label">Ảnh đồng bộ</div>` : '') +
-      synced.map((im) => renderImgRow(im, imgs.indexOf(im))).join('') +
-      (locals.length ? `<div class="section-label" style="margin-top:8px">Ảnh chỉ trên máy này</div>` : '') +
-      locals.map((im) => renderImgRow(im, imgs.indexOf(im))).join('') +
-      (!imgs.length ? '<p style="color:var(--muted);font-size:0.9rem">Chưa có ảnh</p>' : '');
-    updateMultiShareBar();
+    }).join('');
+    updateSendFlowUI(p);
   }
 
-  async function resizeImageFile(file) {
+    async function resizeImageFile(file) {
     const bitmap = await createImageBitmap(file);
     let { width, height } = bitmap;
     const scale = Math.min(1, MAX_IMG_EDGE / Math.max(width, height));
@@ -348,9 +396,9 @@
         ta.value = plain; document.body.appendChild(ta); ta.select();
         document.execCommand('copy'); ta.remove();
       }
-      toast('Đã copy chữ ✓');
+      toast('Đã copy câu ✓');
     } catch {
-      try { await navigator.clipboard.writeText(plain); toast('Đã copy chữ ✓'); }
+      try { await navigator.clipboard.writeText(plain); toast('Đã copy câu ✓'); }
       catch { toast('Không copy được'); }
     }
   }
@@ -415,13 +463,13 @@
     if (localPins[id] != null) {
       delete localPins[id];
       await saveLocalPins();
-      toast('Đã bỏ ghim cá nhân');
+      toast('Đã bỏ ghim');
     } else {
       const vals = Object.values(localPins).map(Number);
       const next = vals.length ? Math.max(...vals) + 1 : 0;
       localPins[id] = next;
       await saveLocalPins();
-      toast('Đã ghim cá nhân 📌');
+      toast('Đã ghim 📌');
     }
     refresh();
     if (currentId === id) openDetail(id);
@@ -540,7 +588,7 @@
     const pinBtn = $('#btnLocalPin');
     if (pinBtn) {
       const on = localPins[p.id] != null;
-      pinBtn.textContent = on ? '📌 Bỏ ghim máy này' : '📌 Ghim trên máy này';
+      pinBtn.textContent = on ? '📌 Bỏ ghim' : '📌 Ghim';
       pinBtn.classList.toggle('pin-on', on);
     }
     const teamPin = $('#teamPinHint');
@@ -549,7 +597,7 @@
     if (by) {
       if ((p.teamShared || p.source === 'team') && (p.authorName || p.authorDeviceId)) {
         by.hidden = false;
-        by.textContent = p.authorName ? ('by ' + p.authorName) : ('by thiết bị ' + String(p.authorDeviceId || '').slice(0, 8));
+        by.textContent = p.authorName ? ('Người gửi: ' + p.authorName) : ('Người gửi: máy ' + String(p.authorDeviceId || '').slice(0, 8));
       } else {
         by.hidden = true;
         by.textContent = '';
@@ -562,6 +610,7 @@
     if (hideBtn) {
       const showHide = !p.personal || !!p.teamShared;
       hideBtn.hidden = !showHide;
+      hideBtn.textContent = '🙈 Ẩn';
     }
     const moveBtn = $('#btnMovePersonal');
     if (moveBtn) {
@@ -571,26 +620,13 @@
     const delBtn = $('#btnDelete');
     if (editBtn) editBtn.style.display = editable ? '' : 'none';
     if (delBtn) delBtn.style.display = editable ? '' : 'none';
-    $('#unicodeToggle').checked = unicodePrefer;
 
-    const vbox = $('#variantList');
-    vbox.innerHTML = (p.variants || []).map((v) => `
-      <div class="variant-card" data-vid="${v.id}">
-        <div class="v-label">${escapeHtml(v.label)}</div>
-        <div class="v-preview">${v.html || ''}</div>
-        <button type="button" class="btn btn-primary" style="width:100%" data-copy-var="${v.id}">📋 Copy chữ</button>
-      </div>`).join('') || '<p style="color:var(--muted)">Chưa có mẫu câu</p>';
-
-    // Reset multi-select when opening a product
+    // Reset send flow when opening a product
     multiSelectMode = false;
     selectedImageIdx = new Set();
     preparedShareFiles = new Map();
+    renderVariantTabs(p);
     renderDetailImages(p);
-    $('#saveImagesFallback').innerHTML = (p.images || []).map((im, i) =>
-      `<button type="button" class="btn btn-ghost" data-save-img="${i}">💾 Lưu ảnh ${i+1}</button>`).join('');
-    const msToggle = $('#btnToggleMultiSelect');
-    if (msToggle) msToggle.hidden = !(p.images && p.images.length);
-    updateMultiShareBar();
     showOverlay('#detailOverlay');
   }
 
@@ -1328,40 +1364,47 @@
       queueDeviceCloudSave();
     };
 
-    $('#variantList').addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-copy-var]');
-      if (!btn) return;
+    // Variant tabs
+    const variantTabs = $('#variantTabs');
+    if (variantTabs) variantTabs.addEventListener('click', (e) => {
+      const tab = e.target.closest('[data-vid]');
+      if (!tab) return;
       const p = products.find((x) => x.id === currentId);
-      const v = p && p.variants.find((x) => x.id === btn.dataset.copyVar);
-      if (!v) return;
-      selectedVariantId = v.id;
-      await copyText(v.html, $('#unicodeToggle').checked);
+      if (!p) return;
+      selectedVariantId = tab.getAttribute('data-vid');
+      renderVariantTabs(p);
+      updateSendFlowUI(p);
     });
+
+    const btnCopyThis = $('#btnCopyThisVariant');
+    if (btnCopyThis) btnCopyThis.onclick = async () => {
+      const p = products.find((x) => x.id === currentId);
+      const v = selectedVariant(p);
+      if (!v) { toast('Chưa có câu'); return; }
+      await copyText(v.html, unicodePrefer);
+    };
 
     $('#imageCopyActions').addEventListener('click', async (e) => {
       const p = products.find((x) => x.id === currentId);
       if (!p) return;
 
-      // Multi-select: tap row (not Copy button) to toggle
       if (multiSelectMode) {
-        const row = e.target.closest('[data-img-idx]');
-        if (!row) return;
-        // Allow Copy button to still work if somehow visible
+        const tile = e.target.closest('[data-img-idx]');
+        if (!tile) return;
         if (e.target.closest('[data-copy-img]')) {
-          /* fall through to copy below */
+          /* rare: copy still visible */
         } else {
-          const idx = Number(row.getAttribute('data-img-idx'));
+          const idx = Number(tile.getAttribute('data-img-idx'));
           if (Number.isNaN(idx)) return;
           if (selectedImageIdx.has(idx)) {
             selectedImageIdx.delete(idx);
             preparedShareFiles.delete(idx);
           } else {
             selectedImageIdx.add(idx);
-            try {
-              await prepareShareFileForIndex(p, idx);
-            } catch (err) {
+            try { await prepareShareFileForIndex(p, idx); }
+            catch (err) {
               selectedImageIdx.delete(idx);
-              toast(err.message || 'Không chuẩn bị được ảnh');
+              toast(err.message || 'Không lấy được ảnh');
             }
           }
           renderDetailImages(p);
@@ -1375,7 +1418,7 @@
       if (!im) return;
       try {
         const resolved = await resolveImageDataURL(im);
-        if (!resolved.dataURL) { toast('Ảnh chưa tải — thử Đồng bộ'); return; }
+        if (!resolved.dataURL) { toast('Ảnh chưa tải — bấm Đồng bộ'); return; }
         if (!im.dataURL) im.dataURL = resolved.dataURL;
         await copyImageToClipboard(resolved.dataURL);
         toast('Đã copy ảnh ✓');
@@ -1388,25 +1431,14 @@
       }
     });
 
-    const btnToggleMulti = $('#btnToggleMultiSelect');
-    if (btnToggleMulti) btnToggleMulti.onclick = () => {
+    async function enterSendFlow() {
       const p = products.find((x) => x.id === currentId);
       if (!p || !(p.images || []).length) { toast('Chưa có ảnh'); return; }
-      multiSelectMode = !multiSelectMode;
-      if (!multiSelectMode) {
-        selectedImageIdx = new Set();
-        preparedShareFiles = new Map();
-      }
-      renderDetailImages(p);
-    };
-
-    const btnSelectAll = $('#btnSelectAllImages');
-    if (btnSelectAll) btnSelectAll.onclick = async () => {
-      const p = products.find((x) => x.id === currentId);
-      if (!p || !multiSelectMode) return;
-      const imgs = p.images || [];
+      multiSelectMode = true;
+      selectedImageIdx = new Set();
+      preparedShareFiles = new Map();
       toast('Đang chuẩn bị ảnh…');
-      for (let i = 0; i < imgs.length; i++) {
+      for (let i = 0; i < p.images.length; i++) {
         selectedImageIdx.add(i);
         try { await prepareShareFileForIndex(p, i); }
         catch (err) {
@@ -1416,21 +1448,37 @@
       }
       renderDetailImages(p);
       if (!selectedImageIdx.size) toast('Không chuẩn bị được ảnh');
-      else toast('Đã chọn ' + selectedImageIdx.size + ' ảnh');
-    };
-
-    const msgCb = $('#shareWithMessage');
-    if (msgCb) {
-      msgCb.checked = !!shareWithMessage;
-      msgCb.onchange = () => {
-        shareWithMessage = !!msgCb.checked;
-        localStorage.setItem('vc-share-msg', shareWithMessage ? '1' : '0');
-      };
     }
 
-    const btnShareSel = $('#btnShareSelectedImages');
-    if (btnShareSel) btnShareSel.onclick = async () => {
-      // iOS: share must run under user gesture with files already prepared on select
+    const btnStartSend = $('#btnStartSend');
+    if (btnStartSend) btnStartSend.onclick = () => enterSendFlow();
+
+    const btnCancelSend = $('#btnCancelSend');
+    if (btnCancelSend) btnCancelSend.onclick = () => {
+      const p = products.find((x) => x.id === currentId);
+      multiSelectMode = false;
+      selectedImageIdx = new Set();
+      preparedShareFiles = new Map();
+      if (p) renderDetailImages(p);
+    };
+
+    const btnSelectAll = $('#btnSelectAllImages');
+    if (btnSelectAll) btnSelectAll.onclick = async () => {
+      const p = products.find((x) => x.id === currentId);
+      if (!p || !multiSelectMode) return;
+      toast('Đang chuẩn bị ảnh…');
+      for (let i = 0; i < (p.images || []).length; i++) {
+        selectedImageIdx.add(i);
+        try { await prepareShareFileForIndex(p, i); }
+        catch (err) {
+          selectedImageIdx.delete(i);
+          console.warn(err);
+        }
+      }
+      renderDetailImages(p);
+    };
+
+    async function sharePreparedFiles({ copyTextFirst }) {
       const p = products.find((x) => x.id === currentId);
       if (!p || !selectedImageIdx.size) return;
       const idxs = [...selectedImageIdx].sort((a, b) => a - b);
@@ -1441,14 +1489,13 @@
         }
       }
       const files = idxs.map((i) => preparedShareFiles.get(i));
-      if (!files.length) { toast('Chưa có ảnh để chia sẻ'); return; }
+      if (!files.length) { toast('Chưa có ảnh'); return; }
 
-      if (shareWithMessage) {
-        const v = p.variants.find((x) => x.id === selectedVariantId) || p.variants[0];
+      if (copyTextFirst) {
+        const v = selectedVariant(p);
         if (v) {
           try {
-            const plain = htmlToPlain(v.html, { unicode: $('#unicodeToggle').checked });
-            // clipboard write is still within the tap gesture
+            const plain = htmlToPlain(v.html, { unicode: unicodePrefer });
             if (navigator.clipboard && navigator.clipboard.writeText) {
               await navigator.clipboard.writeText(plain);
             } else {
@@ -1456,15 +1503,15 @@
               ta.value = plain; document.body.appendChild(ta); ta.select();
               document.execCommand('copy'); ta.remove();
             }
-            toast('Đã copy nội dung, dán vào sau khi chọn ảnh');
+            toast('Đã copy câu, dán vào sau khi gửi ảnh');
           } catch (_) {
-            toast('Không copy được nội dung — vẫn chia sẻ ảnh');
+            toast('Không copy được câu — vẫn gửi ảnh');
           }
         }
       }
 
       if (!canShareFiles(files)) {
-        toast('Máy này không hỗ trợ chia sẻ nhiều ảnh — dùng Copy ảnh từng cái');
+        toast('Máy này chưa gửi được nhiều ảnh — bấm Lưu ảnh về máy hoặc Copy từng ảnh');
         return;
       }
       try {
@@ -1472,45 +1519,16 @@
       } catch (err) {
         if (err && err.name === 'AbortError') return;
         console.warn(err);
-        toast('Không chia sẻ được — thử Copy ảnh');
+        toast('Không gửi được — thử Lưu ảnh về máy');
       }
-    };
-    $('#saveImagesFallback').addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-save-img]');
-      if (!btn) return;
-      const p = products.find((x) => x.id === currentId);
-      const im = p && p.images[Number(btn.dataset.saveImg)];
-      if (!im) return;
-      const a = document.createElement('a');
-      a.href = im.dataURL; a.download = `${(p.title||'sp').slice(0,30)}-${btn.dataset.saveImg}.jpg`; a.click();
-    });
-    $('#btnShare').onclick = async () => {
-      const p = products.find((x) => x.id === currentId);
-      if (!p) return;
-      const v = p.variants.find((x) => x.id === selectedVariantId) || p.variants[0];
-      if (!v) return;
-      const plain = htmlToPlain(v.html, { unicode: $('#unicodeToggle').checked });
-      const files = [];
-      for (let i = 0; i < (p.images||[]).length; i++) {
-        const blob = dataURLToBlob(p.images[i].dataURL);
-        files.push(new File([blob], `vibechic-${i+1}.jpg`, { type: 'image/jpeg' }));
-      }
-      try {
-        const data = { text: plain };
-        if (files.length && navigator.canShare && navigator.canShare({ files })) data.files = files;
-        if (navigator.share) await navigator.share(data);
-        else await copyText(v.html, $('#unicodeToggle').checked);
-      } catch (err) {
-        if (err && err.name === 'AbortError') return;
-        await copyText(v.html, $('#unicodeToggle').checked);
-      }
-    };
+    }
 
-    $('#unicodeToggle').onchange = (e) => {
-      unicodePrefer = e.target.checked;
-      localStorage.setItem('vc-unicode', unicodePrefer ? '1' : '0');
-      $('#defaultUnicode').checked = unicodePrefer;
-    };
+    const btnShareSel = $('#btnShareSelectedImages');
+    if (btnShareSel) btnShareSel.onclick = () => sharePreparedFiles({ copyTextFirst: true });
+
+    const btnSaveShare = $('#btnSaveImagesShare');
+    if (btnSaveShare) btnSaveShare.onclick = () => sharePreparedFiles({ copyTextFirst: false });
+
     $('#defaultUnicode').onchange = (e) => {
       unicodePrefer = e.target.checked;
       localStorage.setItem('vc-unicode', unicodePrefer ? '1' : '0');

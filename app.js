@@ -827,6 +827,17 @@
     return true;
   }
 
+  async function ensureTeamWriteToken() {
+    let tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
+    if (tok) return tok;
+    // Unlocked on an old version that didn't save the write token: ask for the team password once more.
+    await clearTeamKey();
+    const ok = await ensureUnlockedForSync();
+    if (!ok) return '';
+    tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
+    return tok || '';
+  }
+
   async function ensureUnlockedForSync() {
     const meta = await fetchCryptoMeta();
     if (!meta) return false; // no remote yet
@@ -1562,8 +1573,8 @@
             const ok = await ensureUnlockedForSync();
             if (!ok || !teamKey) { toast('Cần mật khẩu đội để đẩy team'); return; }
           }
-          const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
-          if (!tok) { toast('Thiếu token đội — mở khóa lại'); return; }
+          const tok = await ensureTeamWriteToken();
+          if (!tok) { toast('Cần mật khẩu đội để đẩy team'); return; }
           toast('Đang đẩy ảnh lên team…');
           const r = await VCTeamShare.pushProductExtraImage({
             productId: p.id,
@@ -1922,7 +1933,7 @@
 
       if (wantTeam) {
         try {
-          const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
+          const tok = await ensureTeamWriteToken();
           const r = await VCTeamShare.pushTeamItem({
             product, teamKey, teamToken: tok, deviceId: myDeviceId, authorName: staffDisplayName
           });

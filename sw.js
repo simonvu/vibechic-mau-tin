@@ -1,10 +1,7 @@
-const CACHE = 'vibechic-templates-v7';
+const CACHE = 'vibechic-templates-v8';
 const ASSETS = [
   './',
   './index.html',
-  './admin.html',
-  './admin.css',
-  './admin.js',
   './styles.css',
   './app.js',
   './shared.js',

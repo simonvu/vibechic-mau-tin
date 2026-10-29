@@ -1,30 +1,15 @@
-VibeChic Mẫu tin — deploy + mật khẩu đội
+VibeChic Mẫu tin — app (PWA) only on GitHub Pages
 
-INTERIM: https://wary-manta-wmlqv.ship.place/
-Admin: …/admin.html
+Admin KHÔNG host trên Pages. Dùng file offline:
+  /workspace/VibeChic-Admin.html  (mở bằng Chrome/Safari trên máy tính qua file://)
 
-GITHUB PAGES (PUBLIC repo đã duyệt):
-1) Tạo repo PUBLIC trống: simonvu/vibechic-mau-tin
-   (Agent không tạo/push được — cursor-github không có create_repository/push_files; gh chưa login.
-    Repo Cursor thấy hiện tại: NiftyJS/vibechic — khác tên.)
-2) Upload toàn bộ file trong zip lên main (hoặc git push).
-3) Settings → Pages → Deploy from branch: main / (root).
-4) Fine-grained PAT: chỉ repo đó, Contents Read and write
-   https://github.com/settings/personal-access-tokens/new
+Pages app: https://simonvu.github.io/vibechic-mau-tin/
 
-ĐẶT MẬT KHẨU ĐỘI (bắt buộc trước khi nhân viên dùng sync):
-1) Mở admin.html trên máy tính.
-2) Dán token → Lưu token.
-3) Ô "Mật khẩu đội" + nhập lại (≥8 ký tự) — lần đầu để trống checkbox Đổi.
-4) Soạn sản phẩm/ảnh → Đăng lên.
-   → Commit 1 lần: crypto-meta.json (salt + passwordId công khai), templates.json (AES-GCM),
-     images/<id>/<hash>.enc (mã hóa). Không có plaintext mẫu/ảnh trong repo.
-5) Gửi mật khẩu đội cho nhân viên qua kênh riêng (không commit vào git).
+XÓA khỏi repo (đừng để public):
+  admin.html, admin.js, admin.css
 
-iPhone:
-- Mở app → nhập mật khẩu đội → máy nhớ khóa (IndexedDB CryptoKey).
-- Admin đổi mật khẩu (checkbox Đổi) → máy hiện lại màn hình mở khóa.
-- Cài đặt → Đăng xuất / quên máy này để xóa khóa.
+Giữ / upload app:
+  index.html, app.js, shared.js, crypto.js, config.js, styles.css, sw.js,
+  manifest.webmanifest, icons/*, templates.json (sau khi admin đăng bản mã hóa),
+  crypto-meta.json (sau đăng)
 
-App: https://simonvu.github.io/vibechic-mau-tin/
-Admin: https://simonvu.github.io/vibechic-mau-tin/admin.html

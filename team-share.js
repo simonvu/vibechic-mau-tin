@@ -196,8 +196,106 @@
     return out;
   }
 
+
+  async function pushProductExtraImage({
+    productId, image, teamKey, teamToken, deviceId, authorName
+  }) {
+    if (!teamKey) throw new Error('Chưa mở khóa mật khẩu đội');
+    if (!teamToken) throw new Error('Thiếu team write token');
+    if (!deviceId) throw new Error('Thiếu device id');
+    if (!productId) throw new Error('Thiếu product id');
+    if (!image || !image.dataURL) throw new Error('Thiếu ảnh');
+    const imageId = image.id || ('tex-' + String(productId).slice(0, 8) + '-' + Date.now().toString(36));
+    const bytes = dataURLToBytes(image.dataURL);
+    const env = await C().encryptBytes(teamKey, bytes);
+    const put = await teamFetch(
+      '/extras/' + encodeURIComponent(productId) + '/images/' + encodeURIComponent(imageId),
+      {
+        method: 'PUT',
+        deviceId,
+        teamToken,
+        body: JSON.stringify(env),
+        meta: { authorName: (authorName || '').trim().slice(0, 40) }
+      }
+    );
+    if (!put.ok) {
+      const err = await put.json().catch(() => ({}));
+      throw new Error(err.error || ('đẩy ảnh team HTTP ' + put.status));
+    }
+    const j = await put.json().catch(() => ({}));
+    return {
+      ok: true,
+      image: {
+        id: imageId,
+        dataURL: image.dataURL,
+        source: 'team',
+        teamImage: true,
+        teamExtra: true,
+        authorDeviceId: deviceId,
+        authorName: (authorName || '').trim().slice(0, 40)
+      },
+      meta: j.meta || null,
+      entry: j.entry || null
+    };
+  }
+
+  async function deleteProductExtraImage({ productId, imageId, deviceId, teamToken }) {
+    if (!teamToken) throw new Error('Thiếu team write token');
+    if (!deviceId) throw new Error('Thiếu device id');
+    const res = await teamFetch(
+      '/extras/' + encodeURIComponent(productId) + '/images/' + encodeURIComponent(imageId),
+      { method: 'DELETE', deviceId, teamToken }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || ('xóa ảnh team HTTP ' + res.status));
+    }
+    return res.json();
+  }
+
+  async function listProductExtras(teamToken) {
+    const res = await teamFetch('/extras', { method: 'GET', teamToken });
+    if (!res.ok) throw new Error('list extras HTTP ' + res.status);
+    const j = await res.json();
+    return j.items || [];
+  }
+
+  async function pullAllProductExtras({ teamKey, teamToken }) {
+    const metas = await listProductExtras(teamToken);
+    const byProduct = {};
+    for (const m of metas) {
+      const pid = m.productId;
+      if (!pid) continue;
+      const imgs = [];
+      for (const entry of (m.images || [])) {
+        if (!entry || !entry.id) continue;
+        try {
+          const r = await teamFetch('/images/' + encodeURIComponent(entry.id), { method: 'GET', teamToken });
+          if (!r.ok) continue;
+          const env = await r.json();
+          const bytes = await C().decryptBytes(teamKey, env);
+          imgs.push({
+            id: entry.id,
+            dataURL: bytesToJpegDataURL(bytes),
+            source: 'team',
+            teamImage: true,
+            teamExtra: true,
+            authorDeviceId: entry.authorDeviceId || null,
+            authorName: entry.authorName || ''
+          });
+        } catch (e) {
+          console.warn('extra img', entry.id, e);
+        }
+      }
+      byProduct[pid] = imgs;
+    }
+    return byProduct;
+  }
+
   global.VCTeamShare = {
     teamBase, listTeamItems, fetchAndDecryptItem, hydrateTeamImages,
-    pushTeamItem, deleteTeamItem, pullAllTeamProducts
+    pushTeamItem, deleteTeamItem, pullAllTeamProducts,
+    pushProductExtraImage, deleteProductExtraImage,
+    listProductExtras, pullAllProductExtras
   };
 })(typeof window !== 'undefined' ? window : globalThis);

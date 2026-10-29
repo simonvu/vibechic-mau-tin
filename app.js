@@ -353,16 +353,27 @@
     box.innerHTML = imgs.map((im, i) => {
       const selected = selectedImageIdx.has(i);
       const personal = im.source === 'local';
+      const isTeamExtra = !!(im.teamExtra || (im.source === 'team' && im.teamImage));
+      const isTeamish = isTeamExtra || im.source === 'team' || im.teamImage;
       const selClass = multiSelectMode ? ('select-mode' + (selected ? ' selected' : '')) : '';
       const check = multiSelectMode
         ? `<span class="img-check" aria-hidden="true">${selected ? '✓' : ''}</span>`
         : '';
       const badge = personal
         ? '<span class="src-icon src-me" title="Ảnh riêng của tôi" aria-label="Riêng mình">🔒</span>'
-        : '<span class="src-icon src-team" title="Ảnh của team" aria-label="Team">👥</span>';
+        : (isTeamish
+          ? '<span class="src-icon src-team" title="Ảnh của team" aria-label="Team">👥</span>'
+          : '<span class="src-icon src-team" title="Ảnh của team" aria-label="Team">👥</span>');
+      const canRemoveExtra = !multiSelectMode && im.teamExtra && myDeviceId && im.authorDeviceId === myDeviceId;
+      const pushBtn = (!multiSelectMode && personal)
+        ? `<button type="button" class="btn-tile-action btn-push-team" data-push-img="${i}" title="Đẩy lên team" aria-label="Đẩy lên team">👥</button>`
+        : '';
+      const rmBtn = canRemoveExtra
+        ? `<button type="button" class="btn-tile-action btn-rm-extra" data-rm-extra="${i}" title="Xóa khỏi team" aria-label="Xóa khỏi team">✕</button>`
+        : '';
       const src = im.dataURL || imagePublicUrl(im) || '';
       return `<div class="img-tile ${selClass}" data-img-idx="${i}" role="${multiSelectMode ? 'checkbox' : 'group'}" aria-checked="${selected ? 'true' : 'false'}">
-        ${badge}${check}
+        ${badge}${check}${pushBtn}${rmBtn}
         <img src="${src}" alt="Ảnh ${i + 1}" />
         <button type="button" class="btn-copy-mini" data-copy-img="${i}">Copy</button>
       </div>`;
@@ -918,11 +929,15 @@
         if (prev && prev.personal && !inc.personal) continue;
         if (prev && prev.teamShared && !(inc.teamShared || inc.source === 'team')) continue;
         const localOnly = prev ? (prev.images || []).filter((im) => im.source === 'local') : [];
+        const keepExtras = prev ? (prev.images || []).filter((im) => im.teamExtra) : [];
         const syncedIn = [];
         for (const im of (inc.images || [])) {
           const prevImg = prev && (prev.images || []).find((x) => x.id === im.id || (x.hash && x.hash === im.hash));
           if (prevImg && prevImg.dataURL && prevImg.hash === im.hash) {
-            syncedIn.push({ ...im, dataURL: prevImg.dataURL, source: 'synced' });
+            syncedIn.push({ ...im, dataURL: prevImg.dataURL, source: im.source === 'team' ? 'team' : 'synced', teamImage: !!im.teamImage });
+          } else if (im.source === 'team' || im.teamImage) {
+            // already hydrated by team-share
+            syncedIn.push({ ...im, source: 'team', teamImage: true });
           } else {
             syncedIn.push(await ensureImageCached({ ...im, source: 'synced' }));
           }
@@ -943,7 +958,7 @@
           category: inc.category,
           sortOrder: inc.sortOrder != null ? inc.sortOrder : (prev ? prev.sortOrder : products.length + i),
           variants,
-          images: [...syncedIn, ...localOnly],
+          images: [...syncedIn, ...keepExtras, ...localOnly],
           personal: !!(inc.personal || (prev && prev.personal)),
           teamShared: !!(inc.teamShared || inc.source === 'team' || (prev && prev.teamShared)),
           source: inc.source || (prev && prev.source) || 'admin',
@@ -1062,6 +1077,47 @@
     return { ok, sw };
   }
 
+
+  async function mergeTeamExtras(extrasByProduct) {
+    if (!extrasByProduct || typeof extrasByProduct !== 'object') return;
+    let changed = false;
+    const ids = Object.keys(extrasByProduct);
+    for (const pid of ids) {
+      const extras = extrasByProduct[pid] || [];
+      const prev = products.find((x) => x.id === pid);
+      if (!prev) continue;
+      const nonExtra = (prev.images || []).filter((im) => !im.teamExtra);
+      // Keep local dataURL cache when same id already present
+      const prevById = new Map((prev.images || []).map((im) => [im.id, im]));
+      const mergedExtras = extras.map((im) => {
+        const old = prevById.get(im.id);
+        if (old && old.dataURL && !im.dataURL) return { ...im, dataURL: old.dataURL };
+        if (old && old.dataURL && im.dataURL) return { ...im, dataURL: im.dataURL };
+        return im;
+      });
+      // Drop locals that were pushed (same id now in extras)
+      const extraIds = new Set(mergedExtras.map((im) => im.id));
+      const kept = nonExtra.filter((im) => !(im.source === 'local' && extraIds.has(im.id)));
+      const nextImages = [...kept, ...mergedExtras];
+      const same =
+        nextImages.length === (prev.images || []).length &&
+        nextImages.every((im, i) => prev.images[i] && prev.images[i].id === im.id && prev.images[i].source === im.source);
+      if (same) continue;
+      await putProduct({ ...prev, images: nextImages, updatedAt: Date.now() });
+      changed = true;
+    }
+    // Also strip teamExtra images for products that no longer have any extras on server
+    // (only for products we know about that previously had extras — optional; skip for simplicity)
+    if (changed) {
+      products = await getAll();
+      if (currentId) {
+        const cur = products.find((x) => x.id === currentId);
+        if (cur) renderDetailImages(cur);
+      }
+      refresh();
+    }
+  }
+
   async function syncFromGithub() {
     $('#syncStatus').textContent = 'Đang đồng bộ…';
     const unlocked = await ensureUnlockedForSync();
@@ -1105,7 +1161,7 @@
     if (list.length) {
       await mergeProducts(list, { replace: false });
     }
-    // Merge team-contributed items
+    // Merge team-contributed items + per-product extra images
     try {
       if (teamKey && window.VCTeamShare) {
         const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
@@ -1114,6 +1170,12 @@
           if (teamList.length) {
             // Remove local copies of team ids that vanished? keep simple: merge upsert
             await mergeProducts(teamList.map((p) => ({ ...p, teamShared: true, source: 'team', personal: false })), { replace: false });
+          }
+          try {
+            const extrasByProduct = await VCTeamShare.pullAllProductExtras({ teamKey, teamToken: tok });
+            await mergeTeamExtras(extrasByProduct);
+          } catch (ee) {
+            console.warn('team extras pull', ee);
           }
         }
       }
@@ -1301,6 +1363,89 @@
     };
     $('#btnCloseSettings').onclick = () => hideOverlay('#settingsOverlay');
     $('#btnCloseDetail').onclick = () => hideOverlay('#detailOverlay');
+
+    // Swipe left/right on detail sheet to close (like Đóng)
+    (function bindDetailSwipeClose() {
+      const overlay = $('#detailOverlay');
+      const sheet = overlay && overlay.querySelector('.sheet');
+      if (!sheet) return;
+      const THRESH = 80;
+      let startX = 0, startY = 0, dx = 0, dy = 0, tracking = false, decided = false, horizontal = false;
+
+      function resetTransform() {
+        sheet.style.transition = 'transform 0.22s ease, opacity 0.22s ease';
+        sheet.style.transform = '';
+        sheet.style.opacity = '';
+        const clear = () => {
+          sheet.style.transition = '';
+          sheet.removeEventListener('transitionend', clear);
+        };
+        sheet.addEventListener('transitionend', clear);
+      }
+
+      function closeWithSwipe(dir) {
+        sheet.style.transition = 'transform 0.2s ease, opacity 0.2s ease';
+        sheet.style.transform = `translateX(${dir > 0 ? 110 : -110}%)`;
+        sheet.style.opacity = '0';
+        setTimeout(() => {
+          hideOverlay('#detailOverlay');
+          sheet.style.transition = '';
+          sheet.style.transform = '';
+          sheet.style.opacity = '';
+        }, 200);
+      }
+
+      sheet.addEventListener('touchstart', (e) => {
+        if (!e.touches || e.touches.length !== 1) return;
+        const lb = document.getElementById('imgLightbox');
+        if (lb && lb.classList.contains('show')) return;
+        const t = e.touches[0];
+        const target = e.target;
+        if (target && target.closest && target.closest('#variantTabs')) return;
+        startX = t.clientX; startY = t.clientY;
+        dx = 0; dy = 0;
+        tracking = true; decided = false; horizontal = false;
+        sheet.style.transition = 'none';
+      }, { passive: true });
+
+      sheet.addEventListener('touchmove', (e) => {
+        if (!tracking || !e.touches || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        dx = t.clientX - startX;
+        dy = t.clientY - startY;
+        if (!decided) {
+          if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+          decided = true;
+          horizontal = Math.abs(dx) > Math.abs(dy) * 1.2;
+          if (!horizontal) { tracking = false; return; }
+        }
+        if (!horizontal) return;
+        if (e.cancelable) e.preventDefault();
+        const w = sheet.offsetWidth || 1;
+        const opacity = Math.max(0.35, 1 - Math.abs(dx) / w);
+        sheet.style.transform = `translateX(${dx}px)`;
+        sheet.style.opacity = String(opacity);
+      }, { passive: false });
+
+      sheet.addEventListener('touchend', () => {
+        if (!tracking) return;
+        const wasHoriz = horizontal;
+        const finalDx = dx;
+        tracking = false; decided = false; horizontal = false;
+        if (!wasHoriz) { resetTransform(); return; }
+        if (Math.abs(finalDx) >= THRESH && Math.abs(finalDx) > Math.abs(dy)) {
+          closeWithSwipe(finalDx > 0 ? 1 : -1);
+        } else {
+          resetTransform();
+        }
+      }, { passive: true });
+
+      sheet.addEventListener('touchcancel', () => {
+        tracking = false; decided = false; horizontal = false;
+        resetTransform();
+      }, { passive: true });
+    })();
+
     $('#btnCancelEdit').onclick = () => hideOverlay('#editOverlay');
     $$('.overlay').forEach((ov) => ov.addEventListener('click', (e) => {
       if (e.target === ov) { ov.classList.remove('show'); ov.hidden = true; }
@@ -1396,6 +1541,84 @@
     $('#imageCopyActions').addEventListener('click', async (e) => {
       const p = products.find((x) => x.id === currentId);
       if (!p) return;
+
+      const pushBtn = e.target.closest('[data-push-img]');
+      if (pushBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const idx = Number(pushBtn.dataset.pushImg);
+        const im = p.images[idx];
+        if (!im || im.source !== 'local' || !im.dataURL) { toast('Ảnh không hợp lệ'); return; }
+        try {
+          await ensureMyDeviceId();
+          if (!myDeviceId) { toast('Không tạo được mã máy'); return; }
+          if (!staffDisplayName) {
+            const n = prompt('Tên của bạn (hiện với ảnh team):', staffDisplayName || '');
+            if (n == null) return;
+            await saveStaffDisplayName(n);
+            if (!staffDisplayName) { toast('Cần tên để đẩy team'); return; }
+          }
+          if (!teamKey) {
+            const ok = await ensureUnlockedForSync();
+            if (!ok || !teamKey) { toast('Cần mật khẩu đội để đẩy team'); return; }
+          }
+          const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
+          if (!tok) { toast('Thiếu token đội — mở khóa lại'); return; }
+          toast('Đang đẩy ảnh lên team…');
+          const r = await VCTeamShare.pushProductExtraImage({
+            productId: p.id,
+            image: im,
+            teamKey,
+            teamToken: tok,
+            deviceId: myDeviceId,
+            authorName: staffDisplayName
+          });
+          p.images[idx] = { ...r.image };
+          p.updatedAt = Date.now();
+          await putProduct(p);
+          products = await getAll();
+          openDetail(p.id);
+          toast('Đã đẩy ảnh lên team ✓');
+          queueDeviceCloudSave();
+        } catch (err) {
+          toast(err.message || 'Đẩy ảnh thất bại');
+        }
+        return;
+      }
+
+      const rmExtra = e.target.closest('[data-rm-extra]');
+      if (rmExtra) {
+        e.preventDefault();
+        e.stopPropagation();
+        const idx = Number(rmExtra.dataset.rmExtra);
+        const im = p.images[idx];
+        if (!im || !im.teamExtra) return;
+        if (!confirm('Xóa ảnh này khỏi team?')) return;
+        try {
+          await ensureMyDeviceId();
+          if (!teamKey) {
+            const ok = await ensureUnlockedForSync();
+            if (!ok || !teamKey) { toast('Cần mật khẩu đội'); return; }
+          }
+          const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
+          await VCTeamShare.deleteProductExtraImage({
+            productId: p.id,
+            imageId: im.id,
+            deviceId: myDeviceId,
+            teamToken: tok
+          });
+          p.images.splice(idx, 1);
+          p.updatedAt = Date.now();
+          await putProduct(p);
+          products = await getAll();
+          openDetail(p.id);
+          toast('Đã xóa ảnh khỏi team');
+          queueDeviceCloudSave();
+        } catch (err) {
+          toast(err.message || 'Xóa thất bại');
+        }
+        return;
+      }
 
       if (multiSelectMode) {
         const tile = e.target.closest('[data-img-idx]');

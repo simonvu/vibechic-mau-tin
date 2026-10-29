@@ -456,7 +456,7 @@
   function hotRank(p) {
     // Admin pins first (by pinOrder), then personal-only pins
     if (p.pinned) return (p.pinOrder != null ? Number(p.pinOrder) : 0);
-    if (localPins[p.id] != null) return 10000 + Number(localPins[p.id]);
+    if (localPins[p.id] != null) return 1e15 - Number(localPins[p.id]); // newest personal pin first
     return 99999;
   }
   async function toggleLocalPin(id) {
@@ -466,10 +466,13 @@
       toast('Đã bỏ ghim');
     } else {
       const vals = Object.values(localPins).map(Number);
-      const next = vals.length ? Math.max(...vals) + 1 : 0;
-      localPins[id] = next;
+      localPins[id] = Math.max(Date.now(), (vals.length ? Math.max(...vals) : 0) + 1);
+      const MAX_PINS = 10;
+      const ids = Object.keys(localPins).sort((x, y) => Number(localPins[x]) - Number(localPins[y]));
+      let dropped = 0;
+      while (ids.length > MAX_PINS) { delete localPins[ids.shift()]; dropped++; }
       await saveLocalPins();
-      toast('Đã ghim 📌');
+      toast(dropped ? 'Đã ghim 📌 (bỏ ghim mục cũ nhất)' : 'Đã ghim 📌');
     }
     refresh();
     if (currentId === id) openDetail(id);
@@ -556,15 +559,7 @@
         </div>
       </button>`;
     };
-    let html = '';
-    if (hot.length) {
-      html += `<div class="list-section hot-section"><span>📌 Đang hot</span><span class="hot-count">${hot.length}</span></div>`;
-      html += hot.map(card).join('');
-    }
-    if (rest.length) {
-      if (hot.length) html += `<div class="list-section">Tất cả sản phẩm</div>`;
-      html += rest.map(card).join('');
-    }
+    const html = hot.map(card).join('') + rest.map(card).join('');
     box.innerHTML = html;
   }
   function refresh() {

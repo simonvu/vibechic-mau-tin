@@ -1,15 +1,21 @@
-VibeChic Mẫu tin — app (PWA) only on GitHub Pages
+VibeChic Mẫu tin — phone PWA v10.1
 
-Admin KHÔNG host trên Pages. Dùng file offline:
-  /workspace/VibeChic-Admin.html  (mở bằng Chrome/Safari trên máy tính qua file://)
+Data source (encrypted):
+  https://vibechic-admin.tusinh-information.workers.dev/public/templates.json
+  https://vibechic-admin.tusinh-information.workers.dev/public/crypto-meta.json
+  images: .../public/images/...
 
-Pages app: https://simonvu.github.io/vibechic-mau-tin/
+On first open (when crypto-meta present): enter team password once.
+Key stored in IndexedDB (non-extractable CryptoKey) keyed by passwordId.
 
-XÓA khỏi repo (đừng để public):
-  admin.html, admin.js, admin.css
+Admin (online):
+  https://vibechic-admin.tusinh-information.workers.dev/
+  Login: simonvu + admin password
+  Team password: once per browser session (verified vs crypto-meta verifier), client-side AES-GCM publish
 
-Giữ / upload app:
-  index.html, app.js, shared.js, crypto.js, config.js, styles.css, sw.js,
-  manifest.webmanifest, icons/*, templates.json (sau khi admin đăng bản mã hóa),
-  crypto-meta.json (sau đăng)
+GitHub public repo simonvu/vibechic-mau-tin:
+  Replace plaintext templates.json with encrypted stub (see /workspace/vibechic-github-stub/).
+  Do not keep admin sources in the public repo.
 
+Install on iPhone: AirDrop/Files open index.html in Safari → Share → Add to Home Screen
+  Or unzip vibechic-templates-v10.zip and host statically (HTTPS).

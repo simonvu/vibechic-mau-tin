@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "kdf": "PBKDF2-SHA256",
+  "iterations": 300000,
+  "salt": "KI+2eZhX6kiKRPa0d8Z/6w==",
+  "passwordId": "5dbabdfb-82ec-4f20-9afd-e8e527140e2a",
+  "algo": "AES-GCM",
+  "updatedAt": "2026-10-29T12:05:45.038Z",
+  "verifier": {
+    "v": 1,
+    "iv": "EQHiZ3bkAVvmylx4",
+    "ct": "S3QYrpG83YvZmk2FX0z79D4rp3ILWWJuZ3Ei"
+  }
+}

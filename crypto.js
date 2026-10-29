@@ -6,6 +6,7 @@
   const IV_BYTES = 12;
   const SALT_BYTES = 16;
   const META_FILE = 'crypto-meta.json';
+  const VERIFIER_PLAINTEXT = 'vibechic-ok';
 
   function b64encode(buf) {
     const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
@@ -41,7 +42,7 @@
       { name: 'PBKDF2', salt, iterations: iterations || KDF_ITERATIONS, hash: 'SHA-256' },
       base,
       { name: 'AES-GCM', length: 256 },
-      false, // non-extractable
+      false,
       ['encrypt', 'decrypt']
     );
   }
@@ -85,10 +86,23 @@
     };
   }
 
+  async function makeVerifier(key) {
+    return encryptText(key, VERIFIER_PLAINTEXT);
+  }
+
+  async function checkVerifier(key, meta) {
+    if (!meta || !meta.verifier || !isEncryptedEnvelope(meta.verifier)) {
+      throw new Error('no verifier');
+    }
+    const text = await decryptText(key, meta.verifier);
+    if (text !== VERIFIER_PLAINTEXT) throw new Error('bad verifier');
+    return true;
+  }
+
   global.VCCrypto = {
-    KDF_ITERATIONS, META_FILE, IV_BYTES,
+    KDF_ITERATIONS, META_FILE, IV_BYTES, VERIFIER_PLAINTEXT,
     b64encode, b64decode, randomBytes,
     deriveKey, encryptBytes, decryptBytes, encryptText, decryptText,
-    isEncryptedEnvelope, newMeta
+    isEncryptedEnvelope, newMeta, makeVerifier, checkVerifier
   };
 })(typeof window !== 'undefined' ? window : globalThis);

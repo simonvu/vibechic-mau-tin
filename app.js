@@ -531,18 +531,21 @@
 
   async function tryUnlock(password) {
     const meta = await fetchCryptoMeta();
-    if (!meta || !meta.salt) throw new Error('Chưa có crypto-meta trên GitHub — admin cần Đăng lên trước');
+    if (!meta || !meta.salt) throw new Error('Chưa có crypto-meta — admin cần Đăng lên trước');
     const key = await CryptoUtil.deriveKey(password, meta.salt, meta.iterations || CryptoUtil.KDF_ITERATIONS);
-    // Verify by decrypting templates
-    const enc = await fetchJsonUrls([CFG.templatesUrl, CFG.templatesRawUrl]);
-    if (!CryptoUtil.isEncryptedEnvelope(enc)) {
-      // allow plaintext legacy during transition only if decrypt not needed
-      throw new Error('templates.json chưa mã hóa — admin hãy Đăng lên lại');
-    }
     try {
-      const text = await CryptoUtil.decryptText(key, enc);
-      JSON.parse(text);
-    } catch (_) {
+      if (meta.verifier && CryptoUtil.isEncryptedEnvelope(meta.verifier) && CryptoUtil.checkVerifier) {
+        await CryptoUtil.checkVerifier(key, meta);
+      } else {
+        const enc = await fetchJsonUrls([CFG.templatesUrl, CFG.templatesRawUrl]);
+        if (!CryptoUtil.isEncryptedEnvelope(enc)) {
+          throw new Error('templates.json chưa mã hóa — admin hãy Đăng lên lại');
+        }
+        const text = await CryptoUtil.decryptText(key, enc);
+        JSON.parse(text);
+      }
+    } catch (e) {
+      if (e && /chưa mã hóa|crypto-meta/.test(String(e.message || e))) throw e;
       throw new Error('Sai mật khẩu');
     }
     await saveTeamKey(key, meta.passwordId);

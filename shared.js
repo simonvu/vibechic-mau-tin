@@ -230,6 +230,8 @@
 
   function pagesBase() {
     const CFG = (typeof window !== 'undefined' && window.VC_CONFIG) || {};
+    const media = CFG.mediaBaseUrl || CFG.syncBaseUrl || '';
+    if (media) return String(media).replace(/\/?$/, '/');
     return (CFG.pagesAppUrl || '').replace(/\/?$/, '/');
   }
 

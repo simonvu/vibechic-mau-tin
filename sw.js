@@ -1,4 +1,4 @@
-const CACHE = 'vibechic-templates-v9';
+const CACHE = 'vibechic-templates-v10.1';
 const ASSETS = [
   './',
   './index.html',
@@ -36,7 +36,9 @@ self.addEventListener('fetch', (e) => {
     url.pathname.endsWith('templates.json') ||
     url.pathname.endsWith('crypto-meta.json') ||
     url.pathname.includes('/images/') ||
-    url.hostname.includes('github')
+    url.pathname.includes('/public/') ||
+    url.hostname.includes('github') ||
+    url.hostname.endsWith('workers.dev')
   ) {
     e.respondWith(
       fetch(e.request)

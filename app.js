@@ -775,11 +775,13 @@
     box.innerHTML = editVariants.map((v, i) => `
       <div class="edit-variant" data-idx="${i}">
         <div class="v-head">
-          <span style="color:var(--muted);cursor:grab" title="Thứ tự">⋮⋮ ${i+1}</span>
           <input type="text" class="v-label-input" value="${escapeHtml(v.label)}" placeholder="Nhãn mẫu (VD: Báo giá)" maxlength="80" />
-          <button type="button" class="btn btn-ghost" data-up="${i}" ${i===0?'disabled':''}>↑</button>
-          <button type="button" class="btn btn-ghost" data-down="${i}" ${i===editVariants.length-1?'disabled':''}>↓</button>
-          <button type="button" class="btn btn-danger" data-rm-var="${i}">✕</button>
+          <div class="v-head-actions">
+            <span class="v-order" title="Thứ tự">⋮⋮ ${i+1}</span>
+            <button type="button" class="btn btn-ghost v-icon" data-up="${i}" ${i===0?'disabled':''} aria-label="Đưa lên">↑</button>
+            <button type="button" class="btn btn-ghost v-icon" data-down="${i}" ${i===editVariants.length-1?'disabled':''} aria-label="Đưa xuống">↓</button>
+            <button type="button" class="btn btn-danger v-icon" data-rm-var="${i}" aria-label="Xóa mẫu">✕</button>
+          </div>
         </div>
         <div class="v-tools">
           <button type="button" data-cmd="bold" data-vi="${i}"><b>B</b></button>
@@ -795,7 +797,7 @@
     const box = $('#editImages');
     const parts = editImages.map((im, i) => `
       <div class="img-thumb">
-        <img src="${im.url || im.dataURL}" alt="" />
+        <img src="${im.url || im.dataURL || im.thumbDataURL || ''}" alt="" />
         <button type="button" class="rm" data-rm="${i}" aria-label="Xóa">×</button>
       </div>`);
     if (editImages.length < MAX_IMAGES) {
@@ -831,11 +833,16 @@
     if (p && p.images) {
       editImages = p.images.map((im) => ({
         id: im.id || uid(),
-        dataURL: im.dataURL,
-        url: im.dataURL || imagePublicUrl(im),
+        dataURL: im.dataURL || null,
+        thumbDataURL: im.thumbDataURL || null,
+        url: im.dataURL || im.thumbDataURL || imagePublicUrl(im) || '',
         source: im.source || 'local',
         path: im.path || null,
-        hash: im.hash || null
+        hash: im.hash || null,
+        hasFull: im.hasFull != null ? !!im.hasFull : !!(im.dataURL || im.path),
+        hasThumb: im.hasThumb != null ? !!im.hasThumb : !!(im.thumbDataURL || im.path),
+        teamImage: !!im.teamImage,
+        teamExtra: !!im.teamExtra
       }));
     }
     editVariants = p && p.variants && p.variants.length
@@ -1471,9 +1478,22 @@
       basedOnAdmin: basedOnAdmin != null ? basedOnAdmin : !!(p.basedOnAdmin || (!p.personal && p.source === 'admin')),
       ifUpdatedAt: p.remoteUpdatedAt || null
     });
+    const prevImgs = p.images || [];
+    const returned = (r.product && r.product.images) || [];
+    const images = returned.map((im) => {
+      const prev = prevImgs.find((x) => x && x.id === im.id) || {};
+      return {
+        ...prev,
+        ...im,
+        dataURL: prev.dataURL || im.dataURL || null,
+        thumbDataURL: prev.thumbDataURL || im.thumbDataURL || null,
+        path: im.path || prev.path || null
+      };
+    });
     const next = {
       ...p,
       ...(r.product || {}),
+      images,
       personal: false,
       teamShared: true,
       teamProduct: true,
@@ -2323,15 +2343,19 @@
         for (const im of editImages) {
           i += 1;
           if (total > 1) ctx.setProgress('Đang tải ảnh ' + i + '/' + total);
+          let dataURL = im.dataURL || null;
+          if (!dataURL && im.blob) dataURL = await blobToDataURL(im.blob);
           images.push({
             id: im.id,
-            dataURL: im.dataURL || await blobToDataURL(im.blob),
+            dataURL,
             thumbDataURL: im.thumbDataURL || null,
             source: im.source || 'local',
             path: im.path || null,
             hash: im.hash || null,
-            hasFull: true,
-            hasThumb: !!im.thumbDataURL
+            hasFull: !!(dataURL || im.path || im.hasFull),
+            hasThumb: !!(im.thumbDataURL || im.hasThumb || im.path),
+            teamImage: !!im.teamImage,
+            teamExtra: !!im.teamExtra
           });
         }
         ctx.setProgress('Đang lưu…');

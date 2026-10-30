@@ -826,7 +826,7 @@
     const box = $('#editImages');
     const parts = editImages.map((im, i) => `
       <div class="img-thumb">
-        <img src="${im.url || im.dataURL || im.thumbDataURL || ''}" alt="" />
+        <img src="${im.url || im.dataURL || im.thumbDataURL || 'icons/logo-128.png'}" alt="" />
         <button type="button" class="rm" data-rm="${i}" aria-label="Xóa">×</button>
       </div>`);
     if (editImages.length < MAX_IMAGES) {
@@ -880,6 +880,44 @@
     renderEditImages();
     renderEditVariants();
     showOverlay('#editOverlay');
+    void loadEditImagePreviews();
+  }
+
+  let editPreviewGen = 0;
+  async function loadEditImagePreviews() {
+    const gen = ++editPreviewGen;
+    const Cache = window.VCMediaCache;
+    const batch = editImages.slice();
+    let changed = false;
+    for (const im of batch) {
+      if (gen !== editPreviewGen) return;
+      if (!editImages.includes(im)) continue;
+      if (im.url || im.dataURL || im.thumbDataURL) {
+        if (!im.url) {
+          im.url = im.dataURL || im.thumbDataURL;
+          changed = true;
+        }
+        continue;
+      }
+      let src = '';
+      if (Cache && im.id) {
+        try { src = (await Cache.getThumb(im.id)) || (await Cache.getFull(im.id)) || ''; } catch (_) {}
+      }
+      if (!src && im.path) src = imagePublicUrl(im) || '';
+      if (!src && im.id && !im.path && teamKey && window.VCTeamShare) {
+        try {
+          const tok = await ensureTeamWriteToken();
+          await VCTeamShare.hydrateThumb(im, teamKey, tok);
+          src = im.thumbDataURL || '';
+        } catch (e) { console.warn('edit thumb', e); }
+      }
+      if (src && editImages.includes(im)) {
+        im.url = src;
+        if (!im.thumbDataURL && String(src).startsWith('data:')) im.thumbDataURL = src;
+        changed = true;
+      }
+    }
+    if (changed && gen === editPreviewGen) renderEditImages();
   }
 
 
@@ -1427,7 +1465,11 @@
       }
       if (Cache) {
         const hit = await Cache.getThumb(iid);
-        if (hit) { img.src = hit; return; }
+        if (hit) {
+          im.thumbDataURL = hit;
+          img.src = hit;
+          return;
+        }
       }
       if (im.path) {
         const cached = await ensureImageCached(im);
@@ -1499,7 +1541,6 @@
     }
     const tok = await ensureTeamWriteToken();
     if (!tok) throw new Error('Cần mật khẩu đội');
-    // Ensure thumbs exist for local images
     for (const im of (p.images || [])) {
       if (im.path || im.teamImage || im.teamExtra || im.source === 'team') continue;
       if (im.dataURL && !im.thumbDataURL) {
@@ -1507,19 +1548,25 @@
           const blob = dataURLToBlob(im.dataURL);
           const processed = await processImageFile(blob);
           im.thumbDataURL = processed.thumbDataURL;
-          // keep existing full dataURL (already uploaded quality)
         } catch (_) {}
       }
     }
-    const r = await VCTeamShare.pushTeamProduct({
+    const pushOnce = (ifUpdatedAt) => VCTeamShare.pushTeamProduct({
       product: p,
       teamKey,
       teamToken: tok,
       deviceId: myDeviceId,
       authorName: staffDisplayName,
       basedOnAdmin: basedOnAdmin != null ? basedOnAdmin : !!(p.basedOnAdmin || (!p.personal && p.source === 'admin')),
-      ifUpdatedAt: p.remoteUpdatedAt || null
+      ifUpdatedAt: ifUpdatedAt || null
     });
+    let r;
+    try {
+      r = await pushOnce(p.remoteUpdatedAt || null);
+    } catch (e) {
+      if (!(e && e.conflict)) throw e;
+      r = await pushOnce(e.currentUpdatedAt || null);
+    }
     const prevImgs = p.images || [];
     const returned = (r.product && r.product.images) || [];
     const images = returned.map((im) => {

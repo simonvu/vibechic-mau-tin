@@ -234,7 +234,7 @@ img { max-width: 100%; display: block; }
   background: var(--bg2);
 }
 .img-thumb .rm {
-  position: absolute; top: -6px; right: -6px;
+  position: absolute; top: -6px; right: -6px; z-index: 2;
   width: 28px; height: 28px; border-radius: 50%;
   background: var(--danger); color: #fff; font-size: 0.9rem;
   display: grid; place-items: center; box-shadow: 0 2px 6px rgba(0,0,0,0.2);

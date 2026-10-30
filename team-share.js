@@ -166,16 +166,16 @@
         im.hasThumb = !!(im.hasThumb || im.thumbDataURL);
         continue;
       }
-      if (im.dataURL) {
+      if (im.dataURL && String(im.dataURL).startsWith('data:')) {
         const bytes = dataURLToBytes(im.dataURL);
         await putEncryptedBlob('/images/' + encodeURIComponent(iid), bytes, teamKey, deviceId, teamToken);
         im.hasFull = true;
       }
-      if (im.thumbDataURL) {
+      if (im.thumbDataURL && String(im.thumbDataURL).startsWith('data:')) {
         const tbytes = dataURLToBytes(im.thumbDataURL);
         await putEncryptedBlob('/thumbs/' + encodeURIComponent(iid), tbytes, teamKey, deviceId, teamToken);
         im.hasThumb = true;
-      } else if (im.dataURL) {
+      } else if (im.dataURL && String(im.dataURL).startsWith('data:')) {
         // fallback: use full as thumb if no separate thumb (caller should make one)
         const bytes = dataURLToBytes(im.dataURL);
         await putEncryptedBlob('/thumbs/' + encodeURIComponent(iid), bytes, teamKey, deviceId, teamToken);

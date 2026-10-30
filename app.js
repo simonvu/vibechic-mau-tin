@@ -153,9 +153,35 @@
       req.onerror = () => reject(req.error);
     });
   }
+  function imageLivesOnServer(im) {
+    return !!(im && (im.path || im.teamImage || im.teamExtra || im.source === 'team' || im.source === 'synced'));
+  }
+  async function productWithoutEmbeddedBytes(p) {
+    if (!p) return p;
+    const Cache = window.VCMediaCache;
+    const images = [];
+    for (const im of p.images || []) {
+      if (!im) continue;
+      const next = { ...im };
+      if (Cache && next.id && next.thumbDataURL) {
+        try { await Cache.putThumb(next.id, next.thumbDataURL); } catch (_) {}
+      }
+      if (imageLivesOnServer(next)) {
+        delete next.dataURL;
+        delete next.thumbDataURL;
+        delete next.url;
+      } else if (next.thumbDataURL && next.dataURL) {
+        delete next.thumbDataURL;
+      }
+      delete next.blob;
+      images.push(next);
+    }
+    return { ...p, images };
+  }
   async function putProduct(p) {
+    const stored = await productWithoutEmbeddedBytes(p);
     const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put(migrateProduct(p));
+    tx.objectStore(STORE).put(migrateProduct(stored));
     await txDone(tx);
   }
   async function deleteProduct(id) {
@@ -430,14 +456,17 @@
       const rmBtn = (!multiSelectMode && editable)
         ? `<button type="button" class="btn-tile-action btn-rm-extra" data-rm-img="${i}" title="Xóa ảnh" aria-label="Xóa ảnh">✕</button>`
         : "";
-      const src = im.thumbDataURL || im.dataURL || imagePublicUrl(im) || "";
+      const pub = im.path ? imagePublicUrl(im) : "";
+      const src = pub || "icons/logo-128.png";
+      const pending = pub ? "" : ` class="lazy-thumb" data-thumb-pending="1" data-thumb-id="${im.id || ""}" data-product-id="${p.id}"`;
       return `<div class="img-tile ${selClass}" data-img-idx="${i}" role="${multiSelectMode ? "checkbox" : "group"}" aria-checked="${selected ? "true" : "false"}">
         ${badge}${check}${rmBtn}
-        <img src="${src}" alt="Ảnh ${i + 1}" loading="lazy" data-full-id="${im.id || ""}" />
+        <img src="${src}" alt="Ảnh ${i + 1}" loading="lazy" decoding="async" data-full-id="${im.id || ""}"${pending} />
         <button type="button" class="btn-copy-mini" data-copy-img="${i}">Copy</button>
       </div>`;
     }).join("");
     updateSendFlowUI(p);
+    observeLazyThumbs();
   }
 
   function openLightbox(src) {
@@ -656,12 +685,12 @@
   }
   function cardThumbHtml(p) {
     const imgs = p.images || [];
-    const im = imgs.find((x) => x.thumbDataURL || x.dataURL || x.path || imagePublicUrl(x)) || imgs[0];
+    const im = imgs.find((x) => x.id || x.path) || imgs[0];
     if (im) {
-      const eager = im.thumbDataURL || (im.path ? imagePublicUrl(im) : "") || "";
       const iid = im.id || "";
-      if (eager) {
-        return `<img class="card-thumb" src="${eager}" alt="" loading="lazy" decoding="async" width="96" height="96" data-thumb-id="${iid}" data-product-id="${p.id}" />`;
+      const pub = im.path ? imagePublicUrl(im) : "";
+      if (pub) {
+        return `<img class="card-thumb" src="${pub}" alt="" loading="lazy" decoding="async" width="96" height="96" data-thumb-id="${iid}" data-product-id="${p.id}" />`;
       }
       return `<img class="card-thumb card-thumb-lazy" src="icons/logo-128.png" alt="" loading="lazy" decoding="async" width="96" height="96" data-thumb-id="${iid}" data-product-id="${p.id}" data-thumb-pending="1" />`;
     }
@@ -1377,69 +1406,82 @@
 
 
   async function scheduleDetailHydrate(p) {
-    if (!p || !teamKey || !window.VCTeamShare) return;
+    if (!p) return;
+    observeLazyThumbs();
+  }
+
+  const thumbWait = [];
+  let thumbBusy = 0;
+  async function fillThumb(img) {
+    const pid = img.getAttribute('data-product-id');
+    const iid = img.getAttribute('data-thumb-id');
+    if (!pid || !iid) return;
+    const p = products.find((x) => x.id === pid);
+    const im = p && (p.images || []).find((x) => x.id === iid);
+    if (!im) return;
+    const Cache = window.VCMediaCache;
     try {
-      const tok = await ensureTeamWriteToken();
-      let dirty = false;
-      for (const im of (p.images || [])) {
-        if (im.path) { await ensureImageCached(im); continue; }
-        if (!im.dataURL) {
-          await VCTeamShare.hydrateFull(im, teamKey, tok);
-          if (im.dataURL) dirty = true;
-        }
+      if (im.thumbDataURL) {
+        img.src = im.thumbDataURL;
+        return;
       }
-      if (dirty) {
-        await putProduct(p);
-        products = await getAll();
-        if (currentId === p.id) {
-          const fresh = products.find((x) => x.id === p.id) || p;
-          renderDetailImages(fresh);
-        }
+      if (Cache) {
+        const hit = await Cache.getThumb(iid);
+        if (hit) { img.src = hit; return; }
       }
-    } catch (e) { console.warn('hydrate detail', e); }
+      if (im.path) {
+        const cached = await ensureImageCached(im);
+        if (cached && cached.dataURL) img.src = cached.dataURL;
+        return;
+      }
+      if (im.dataURL && !imageLivesOnServer(im)) {
+        img.src = im.dataURL;
+        return;
+      }
+      if (teamKey && window.VCTeamShare) {
+        const tok = await ensureTeamWriteToken();
+        await VCTeamShare.hydrateThumb(im, teamKey, tok);
+        if (im.thumbDataURL) img.src = im.thumbDataURL;
+      }
+    } catch (e) {
+      console.warn('lazy thumb', e);
+    }
+  }
+  function drainThumbs() {
+    while (thumbBusy < 4 && thumbWait.length) {
+      const img = thumbWait.shift();
+      thumbBusy += 1;
+      fillThumb(img).finally(() => {
+        thumbBusy -= 1;
+        img.removeAttribute('data-thumb-pending');
+        drainThumbs();
+      });
+    }
+  }
+  function queueThumb(img) {
+    if (!img || img.dataset.thumbQueued === '1') return;
+    img.dataset.thumbQueued = '1';
+    thumbWait.push(img);
+    drainThumbs();
   }
 
   let thumbObserver = null;
   function ensureThumbObserver() {
     if (thumbObserver || typeof IntersectionObserver === 'undefined') return thumbObserver;
-    thumbObserver = new IntersectionObserver(async (entries) => {
+    thumbObserver = new IntersectionObserver((entries) => {
       for (const ent of entries) {
         if (!ent.isIntersecting) continue;
-        const img = ent.target;
-        const pid = img.getAttribute('data-product-id');
-        const iid = img.getAttribute('data-thumb-id');
-        if (!pid || !iid) { thumbObserver.unobserve(img); continue; }
-        const p = products.find((x) => x.id === pid);
-        const im = p && (p.images || []).find((x) => x.id === iid);
-        if (!im) { thumbObserver.unobserve(img); continue; }
-        try {
-          if (im.thumbDataURL) {
-            img.src = im.thumbDataURL;
-          } else if (im.path) {
-            const cached = await ensureImageCached(im);
-            if (cached && cached.dataURL) img.src = cached.dataURL;
-          } else if (teamKey && window.VCTeamShare) {
-            const tok = await ensureTeamWriteToken();
-            await VCTeamShare.hydrateThumb(im, teamKey, tok);
-            if (im.thumbDataURL) {
-              img.src = im.thumbDataURL;
-              await putProduct(p);
-            }
-          } else if (im.dataURL) {
-            img.src = im.dataURL;
-          }
-          img.removeAttribute('data-thumb-pending');
-        } catch (e) { console.warn('lazy thumb', e); }
-        thumbObserver.unobserve(img);
+        thumbObserver.unobserve(ent.target);
+        queueThumb(ent.target);
       }
-    }, { rootMargin: '120px' });
+    }, { rootMargin: '200px' });
     return thumbObserver;
   }
 
   function observeLazyThumbs() {
     const obs = ensureThumbObserver();
     if (!obs) return;
-    document.querySelectorAll('img.card-thumb[data-thumb-pending], img.card-thumb-lazy').forEach((el) => obs.observe(el));
+    document.querySelectorAll('img[data-thumb-pending]').forEach((el) => obs.observe(el));
   }
 
   async function pushProductToTeam(p, { basedOnAdmin } = {}) {
@@ -1459,7 +1501,7 @@
     if (!tok) throw new Error('Cần mật khẩu đội');
     // Ensure thumbs exist for local images
     for (const im of (p.images || [])) {
-      if (im.path) continue;
+      if (im.path || im.teamImage || im.teamExtra || im.source === 'team') continue;
       if (im.dataURL && !im.thumbDataURL) {
         try {
           const blob = dataURLToBlob(im.dataURL);
@@ -1588,6 +1630,22 @@
     await setMeta('lastSync', Date.now());
     $('#syncStatus').textContent = 'Đã đồng bộ';
     return true;
+  }
+
+  async function flushDetachedThumbs(jobs, rewrite) {
+    const Cache = window.VCMediaCache;
+    if (Cache && jobs.length) {
+      for (let i = 0; i < jobs.length; i++) {
+        const row = jobs[i];
+        try { if (row && row.id && row.dataURL) await Cache.putThumb(row.id, row.dataURL); } catch (_) {}
+        jobs[i] = null;
+        if (i % 6 === 5) await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+    if (!rewrite) return;
+    try {
+      for (const p of products) await putProduct(p);
+    } catch (e) { console.warn('compact products', e); }
   }
 
   async function ensureSeed() {
@@ -2450,6 +2508,28 @@
     $('#defaultUnicode').checked = unicodePrefer;
     db = await openDB();
     products = await getAll();
+    const mediaJobs = [];
+    let compactProducts = false;
+    products = products.map((p) => {
+      const images = (p.images || []).map((im) => {
+        if (!im) return im;
+        const next = { ...im };
+        const hadBytes = !!(next.dataURL || next.thumbDataURL);
+        if (next.id && next.thumbDataURL) mediaJobs.push({ id: next.id, dataURL: next.thumbDataURL });
+        if (imageLivesOnServer(next)) {
+          if (hadBytes) compactProducts = true;
+          delete next.dataURL;
+          delete next.thumbDataURL;
+          delete next.url;
+        } else if (next.thumbDataURL) {
+          compactProducts = true;
+          delete next.thumbDataURL;
+        }
+        return next;
+      });
+      return { ...p, images };
+    });
+    void flushDetachedThumbs(mediaJobs, compactProducts);
     await migrateLegacyStore();
     await ensureSeed();
     products = await getAll();

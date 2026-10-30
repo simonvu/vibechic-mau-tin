@@ -160,6 +160,12 @@
       if (im.path) continue; // admin public
       const iid = im.id || ('timg-' + String(id).slice(0, 8) + '-' + j);
       im.id = iid;
+      const alreadyOnTeam = !!(im.teamImage || im.teamExtra || im.source === 'team');
+      if (alreadyOnTeam) {
+        im.hasFull = !!(im.hasFull || im.dataURL);
+        im.hasThumb = !!(im.hasThumb || im.thumbDataURL);
+        continue;
+      }
       if (im.dataURL) {
         const bytes = dataURLToBytes(im.dataURL);
         await putEncryptedBlob('/images/' + encodeURIComponent(iid), bytes, teamKey, deviceId, teamToken);
@@ -276,14 +282,39 @@
    * Incremental pull: only products with meta.updatedAt > since.
    * Returns { products, newestUpdatedAt } without full image bytes (thumbs optional lazy).
    */
+  async function mapPool(items, limit, fn) {
+    const out = new Array(items.length);
+    let cursor = 0;
+    const n = Math.min(limit, items.length);
+    async function worker() {
+      while (cursor < items.length) {
+        const idx = cursor;
+        cursor += 1;
+        out[idx] = await fn(items[idx], idx);
+      }
+    }
+    if (n > 0) await Promise.all(Array.from({ length: n }, () => worker()));
+    return out;
+  }
+
   async function pullTeamProductsIncremental({ teamKey, teamToken, since }) {
     const metas = await listTeamProducts(teamToken, since || '');
     const out = [];
     let newest = since || '';
-    for (const m of metas) {
+    const bodies = await mapPool(metas, 6, async (m) => {
+      try {
+        return await fetchAndDecryptProduct(m.id, teamKey, teamToken);
+      } catch (e) {
+        console.warn('team product', m.id, e);
+        return null;
+      }
+    });
+    for (let i = 0; i < metas.length; i++) {
+      const m = metas[i];
+      const raw = bodies[i];
+      if (!raw) continue;
       try {
         if (m.updatedAt && m.updatedAt > newest) newest = m.updatedAt;
-        const raw = await fetchAndDecryptProduct(m.id, teamKey, teamToken);
         let product = raw.product || raw;
         product = {
           ...product,

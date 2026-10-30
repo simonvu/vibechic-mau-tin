@@ -174,6 +174,9 @@
         delete next.thumbDataURL;
       }
       delete next.blob;
+      delete next.fullBlob;
+      delete next.thumbBlob;
+      delete next.pendingUpload;
       images.push(next);
     }
     return { ...p, images };
@@ -183,6 +186,14 @@
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).put(migrateProduct(stored));
     await txDone(tx);
+    return stored;
+  }
+  function replaceProduct(p) {
+    if (!p || !p.id) return p;
+    const i = products.findIndex((x) => x.id === p.id);
+    if (i >= 0) products[i] = p;
+    else products.push(p);
+    return p;
   }
   async function deleteProduct(id) {
     const tx = db.transaction(STORE, 'readwrite');
@@ -1138,7 +1149,7 @@
         }
         imgs.push(row);
       }
-      await putProduct({
+      replaceProduct(await putProduct({
         ...(prev || {}),
         id: inc.id,
         title: inc.title,
@@ -1158,9 +1169,8 @@
         pinOrder: inc.pinned ? (inc.pinOrder != null ? Number(inc.pinOrder) : 0) : null,
         createdAt: prev ? prev.createdAt : (inc.createdAt || Date.now()),
         updatedAt: Date.now()
-      });
+      }));
     }
-    products = await getAll();
     refresh();
   }
 
@@ -1364,14 +1374,15 @@
 
 
   function isTeamExtraImage(im) {
-    if (!im) return false;
-    if (im.path) return false; // admin public media is never an extra
-    if (im.teamExtra) return true;
-    return im.source === 'team' || !!im.teamImage;
+    if (!im || im.path) return false;
+    return !!im.teamExtra;
   }
 
   async function pullAndMergeTeamExtras() {
     if (!teamKey || !window.VCTeamShare) return false;
+    // Legacy extras were copied onto products once. Later opens only
+    // pull products that actually changed.
+    if (await getMeta('extrasMigratedV25')) return false;
     try {
       const tok = await ensureTeamWriteToken();
       if (!tok) return false;
@@ -1542,8 +1553,9 @@
     const tok = await ensureTeamWriteToken();
     if (!tok) throw new Error('Cần mật khẩu đội');
     for (const im of (p.images || [])) {
-      if (im.path || im.teamImage || im.teamExtra || im.source === 'team') continue;
-      if (im.dataURL && !im.thumbDataURL) {
+      const fresh = !!(im && (im.pendingUpload || im.source === 'local' || im.source === 'personal'));
+      if (!fresh || im.path || im.teamImage || im.teamExtra || im.source === 'team') continue;
+      if (im.dataURL && !im.thumbDataURL && !im.thumbBlob) {
         try {
           const blob = dataURLToBlob(im.dataURL);
           const processed = await processImageFile(blob);
@@ -1590,9 +1602,9 @@
       remoteUpdatedAt: r.remoteUpdatedAt || null,
       updatedAt: Date.now()
     };
-    await putProduct(next);
-    products = await getAll();
-    return next;
+    const stored = await putProduct(next);
+    replaceProduct(stored);
+    return stored;
   }
 
   async function syncFromGithub() {
@@ -2075,10 +2087,9 @@
           if (isTeamVisibleProduct(p)) {
             await pushProductToTeam(p, { basedOnAdmin: !!(p.basedOnAdmin || p.source === 'admin') });
           } else {
-            await putProduct(p);
+            replaceProduct(await putProduct(p));
             queueDeviceCloudSave();
           }
-          products = await getAll();
           openDetail(p.id);
         });
         return;
@@ -2343,7 +2354,10 @@
               id: uid(),
               dataURL: processed.fullDataURL,
               thumbDataURL: processed.thumbDataURL,
-              source: isTeamVisibleProduct(p) ? 'team' : 'local',
+              fullBlob: processed.fullBlob,
+              thumbBlob: processed.thumbBlob,
+              source: 'local',
+              pendingUpload: true,
               hasFull: true,
               hasThumb: true
             });
@@ -2353,10 +2367,9 @@
           if (isTeamVisibleProduct(p)) {
             await pushProductToTeam(p, { basedOnAdmin: !!(p.basedOnAdmin || p.source === 'admin') });
           } else {
-            await putProduct(p);
+            replaceProduct(await putProduct(p));
             queueDeviceCloudSave();
           }
-          products = await getAll();
           openDetail(p.id);
         });
       };
@@ -2443,23 +2456,29 @@
 
       await withSaving({ key: 'editForm', btn: btnSave, form: formEl, busyLabel: 'Đang lưu…', successToast: 'Đã lưu' }, async (ctx) => {
         const images = [];
-        const total = editImages.length;
-        let i = 0;
+        const freshImages = editImages.filter((im) => im && !im.path && !im.teamImage && !im.teamExtra && im.source !== 'team' && im.source !== 'synced');
+        let n = 0;
         for (const im of editImages) {
-          i += 1;
-          if (total > 1) ctx.setProgress('Đang tải ảnh ' + i + '/' + total);
-          let dataURL = im.dataURL || null;
-          if (!dataURL && im.blob) dataURL = await blobToDataURL(im.blob);
+          const storedAlready = !!(im.path || im.teamImage || im.teamExtra || im.source === 'team' || im.source === 'synced');
+          let dataURL = storedAlready ? null : (im.dataURL || null);
+          if (!storedAlready) {
+            n += 1;
+            if (freshImages.length) ctx.setProgress('Đang tải ảnh mới ' + n + '/' + freshImages.length);
+            if (!dataURL && im.blob) dataURL = await blobToDataURL(im.blob);
+          }
           images.push({
             id: im.id,
             dataURL,
-            thumbDataURL: im.thumbDataURL || null,
-            source: im.source || 'local',
+            thumbDataURL: storedAlready ? null : (im.thumbDataURL || null),
+            fullBlob: storedAlready ? null : (im.fullBlob || im.blob || null),
+            thumbBlob: storedAlready ? null : (im.thumbBlob || null),
+            source: storedAlready ? (im.source || 'team') : 'local',
+            pendingUpload: !storedAlready && !!(dataURL || im.blob || im.fullBlob || im.thumbDataURL || im.thumbBlob),
             path: im.path || null,
             hash: im.hash || null,
             hasFull: !!(dataURL || im.path || im.hasFull),
             hasThumb: !!(im.thumbDataURL || im.hasThumb || im.path),
-            teamImage: !!im.teamImage,
+            teamImage: storedAlready && !!im.teamImage,
             teamExtra: !!im.teamExtra
           });
         }
@@ -2481,17 +2500,16 @@
         };
 
         if (wantTeam) {
-          const saved = await pushProductToTeam(product, {
+          await pushProductToTeam(product, {
             basedOnAdmin: !!(prev && (prev.source === 'admin' || prev.basedOnAdmin))
           });
-          Object.assign(product, saved, { personal: false, teamShared: true, teamProduct: true, source: 'team' });
+        } else {
+          replaceProduct(await putProduct(product));
+          queueDeviceCloudSave();
         }
 
-        await putProduct(product);
-        products = await getAll();
         hideOverlay('#editOverlay');
         refresh();
-        queueDeviceCloudSave();
       });
     });
 

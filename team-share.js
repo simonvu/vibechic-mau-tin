@@ -20,6 +20,14 @@
     return 'data:image/jpeg;base64,' + C().b64encode(bytes);
   }
 
+  async function localImageBytes(blob, dataURL) {
+    if (blob && typeof blob.arrayBuffer === 'function') {
+      return new Uint8Array(await blob.arrayBuffer());
+    }
+    if (typeof dataURL === 'string' && dataURL.startsWith('data:')) return dataURLToBytes(dataURL);
+    return null;
+  }
+
   async function teamFetch(path, { method, deviceId, teamToken, body, meta, ifUpdatedAt } = {}) {
     const writing = method === 'PUT' || method === 'DELETE' || method === 'POST';
     const headers = { 'Content-Type': 'application/json; charset=utf-8' };
@@ -158,30 +166,37 @@
 
     for (let j = 0; j < (product.images || []).length; j++) {
       const im = product.images[j];
-      if (im.path) continue; // admin public
+      if (!im || im.path) continue; // admin public — reference only
       const iid = im.id || ('timg-' + String(id).slice(0, 8) + '-' + j);
       im.id = iid;
-      const alreadyOnTeam = !!(im.teamImage || im.teamExtra || im.source === 'team');
-      if (alreadyOnTeam) {
-        im.hasFull = !!(im.hasFull || im.dataURL);
-        im.hasThumb = !!(im.hasThumb || im.thumbDataURL);
+      // Upload only a photo that was just added on this device.
+      // Anything already on the team stays put, even if a preview is in memory.
+      const fresh = !!(im.pendingUpload || im.source === 'local' || im.source === 'personal');
+      if (!fresh) {
+        im.hasFull = !!(im.hasFull || im.dataURL || im.path);
+        im.hasThumb = !!(im.hasThumb || im.thumbDataURL || im.path);
         continue;
       }
-      if (im.dataURL && String(im.dataURL).startsWith('data:')) {
-        const bytes = dataURLToBytes(im.dataURL);
-        await putEncryptedBlob('/images/' + encodeURIComponent(iid), bytes, teamKey, deviceId, teamToken);
-        im.hasFull = true;
+      const fullBytes = await localImageBytes(im.fullBlob || im.blob, fresh ? im.dataURL : null);
+      const thumbBytes = await localImageBytes(im.thumbBlob, fresh ? im.thumbDataURL : null);
+      if (!fullBytes && !thumbBytes) continue;
+      const uploads = [];
+      if (fullBytes) {
+        uploads.push(putEncryptedBlob('/images/' + encodeURIComponent(iid), fullBytes, teamKey, deviceId, teamToken)
+          .then(() => { im.hasFull = true; }));
       }
-      if (im.thumbDataURL && String(im.thumbDataURL).startsWith('data:')) {
-        const tbytes = dataURLToBytes(im.thumbDataURL);
-        await putEncryptedBlob('/thumbs/' + encodeURIComponent(iid), tbytes, teamKey, deviceId, teamToken);
-        im.hasThumb = true;
-      } else if (im.dataURL && String(im.dataURL).startsWith('data:')) {
-        // fallback: use full as thumb if no separate thumb (caller should make one)
-        const bytes = dataURLToBytes(im.dataURL);
-        await putEncryptedBlob('/thumbs/' + encodeURIComponent(iid), bytes, teamKey, deviceId, teamToken);
-        im.hasThumb = true;
+      const thumbPayload = thumbBytes || fullBytes;
+      if (thumbPayload) {
+        uploads.push(putEncryptedBlob('/thumbs/' + encodeURIComponent(iid), thumbPayload, teamKey, deviceId, teamToken)
+          .then(() => { im.hasThumb = true; }));
       }
+      await Promise.all(uploads);
+      im.source = 'team';
+      im.teamImage = true;
+      im.pendingUpload = false;
+      delete im.fullBlob;
+      delete im.thumbBlob;
+      delete im.blob;
     }
 
     const { payload, imageIds, thumbIds } = packProductForTeam(product, { deviceId, authorName, basedOnAdmin });

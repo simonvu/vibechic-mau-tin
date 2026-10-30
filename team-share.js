@@ -25,7 +25,8 @@
     const headers = { 'Content-Type': 'application/json; charset=utf-8' };
     if (teamToken) headers['X-VC-Team-Token'] = teamToken;
     if (deviceId) headers['Authorization'] = 'Bearer ' + deviceId;
-    if (ifUpdatedAt) headers['X-VC-If-Updated-At'] = ifUpdatedAt;
+    // Live Worker CORS does not allow X-VC-If-Updated-At yet. Sending it makes
+    // the browser reject the PUT with "Failed to fetch" (add image and delete).
     if (meta) {
       const json = JSON.stringify(meta);
       headers['X-VC-Item-Meta'] = btoa(unescape(encodeURIComponent(json)));

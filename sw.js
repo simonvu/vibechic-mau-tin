@@ -1,4 +1,4 @@
-const CACHE = 'vibechic-templates-v29';
+const CACHE = 'vibechic-templates-v30';
 const ASSETS = [
   './',
   './index.html',

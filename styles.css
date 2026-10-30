@@ -641,3 +641,37 @@ img { max-width: 100%; display: block; }
   will-change: transform, opacity;
   touch-action: pan-y;
 }
+
+
+/* ---- v26 save loading ---- */
+.btn.is-saving {
+  pointer-events: none;
+  opacity: 0.85;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.btn-spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: vc-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+.btn-ghost.is-saving .btn-spinner,
+.btn-secondary.is-saving .btn-spinner,
+.btn-danger.is-saving .btn-spinner {
+  border-color: rgba(0,0,0,0.15);
+  border-top-color: var(--pink, #e91e8c);
+}
+.form-saving {
+  opacity: 0.72;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.form-saving .btn.is-saving {
+  pointer-events: none;
+  opacity: 1;
+}

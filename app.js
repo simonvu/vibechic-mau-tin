@@ -43,6 +43,61 @@
     clearTimeout(toast._t);
     toast._t = setTimeout(() => el.classList.remove('show'), 2200);
   }
+
+  /** In-flight guards + button spinner for every save action (v26) */
+  const savingLocks = new Set();
+  function setBtnSaving(btn, on, label) {
+    if (!btn) return;
+    if (on) {
+      if (btn.dataset.saveLabel == null) btn.dataset.saveLabel = btn.innerHTML;
+      btn.disabled = true;
+      btn.classList.add('is-saving');
+      btn.setAttribute('aria-busy', 'true');
+      btn.innerHTML = '<span class="btn-spinner" aria-hidden="true"></span> ' + (label || 'Đang lưu…');
+    } else {
+      btn.disabled = false;
+      btn.classList.remove('is-saving');
+      btn.removeAttribute('aria-busy');
+      if (btn.dataset.saveLabel != null) {
+        btn.innerHTML = btn.dataset.saveLabel;
+        delete btn.dataset.saveLabel;
+      }
+    }
+  }
+  /**
+   * Run an async save with double-submit guard, spinner, optional form dim.
+   * opts: { key, btn, form, busyLabel, successToast }
+   * fn(ctx) may call ctx.setProgress('Đang tải ảnh 1/3')
+   * Returns true on success, false on fail/cancelled/locked.
+   */
+  async function withSaving(opts, fn) {
+    const key = (opts && opts.key) || (opts && opts.btn && (opts.btn.id || opts.btn.getAttribute('data-unhide') || 'save')) || 'save';
+    if (savingLocks.has(key)) return false;
+    savingLocks.add(key);
+    const btn = opts && opts.btn;
+    const form = opts && opts.form;
+    const busyLabel = (opts && opts.busyLabel) || 'Đang lưu…';
+    const successMsg = opts && ('successToast' in opts) ? opts.successToast : 'Đã lưu';
+    try {
+      setBtnSaving(btn, true, busyLabel);
+      if (form) form.classList.add('form-saving');
+      const ctx = {
+        setProgress(text) { setBtnSaving(btn, true, text || busyLabel); }
+      };
+      await fn(ctx);
+      if (successMsg) toast(successMsg);
+      return true;
+    } catch (e) {
+      if (e && e.message === 'cancelled') return false;
+      const detail = e && e.message ? String(e.message) : '';
+      toast(detail ? ('Lưu thất bại, thử lại — ' + detail) : 'Lưu thất bại, thử lại');
+      return false;
+    } finally {
+      setBtnSaving(btn, false);
+      if (form) form.classList.remove('form-saving');
+      savingLocks.delete(key);
+    }
+  }
   function showOverlay(id) {
     const el = $(id); el.hidden = false; el.classList.add('show'); el.removeAttribute('hidden');
   }
@@ -1634,12 +1689,13 @@
       box.querySelectorAll('[data-unhide]').forEach((btn) => {
         btn.onclick = async () => {
           const id = btn.getAttribute('data-unhide');
-          delete hiddenIds[id];
-          await saveHiddenIds();
-          renderHiddenList();
-          refresh();
-          toast('Đã hiện lại');
-          queueDeviceCloudSave();
+          await withSaving({ key: 'unhide:' + id, btn, successToast: 'Đã lưu' }, async () => {
+            delete hiddenIds[id];
+            await saveHiddenIds();
+            renderHiddenList();
+            refresh();
+            queueDeviceCloudSave();
+          });
         };
       });
     }
@@ -1790,29 +1846,26 @@
     const btnHide = $('#btnHideItem');
     if (btnHide) btnHide.onclick = async () => {
       if (!currentId) return;
-      hiddenIds[currentId] = true;
-      await saveHiddenIds();
-      hideOverlay('#detailOverlay');
-      refresh();
-      toast('Đã ẩn (chỉ mình bạn)');
-      
+      if (savingLocks.has('hide')) return;
+      await withSaving({ key: 'hide', btn: btnHide, successToast: 'Đã lưu' }, async () => {
+        hiddenIds[currentId] = true;
+        await saveHiddenIds();
+        hideOverlay('#detailOverlay');
+        refresh();
+        queueDeviceCloudSave();
+      });
+    };
     const btnPushProduct = $('#btnPushProduct');
     if (btnPushProduct) btnPushProduct.onclick = async () => {
       if (!currentId) return;
       const p = products.find((x) => x.id === currentId);
       if (!p || !isPrivateProduct(p)) { toast('Chỉ đẩy sản phẩm riêng'); return; }
       if (!confirm('Đẩy CẢ sản phẩm (mẫu câu + ảnh) lên team? Mọi người sẽ thấy và sửa được.')) return;
-      try {
+      await withSaving({ key: 'push-team', btn: btnPushProduct, busyLabel: 'Đang đẩy…', successToast: 'Đã lưu' }, async () => {
         const next = await pushProductToTeam(p, { basedOnAdmin: false });
         openDetail(next.id);
         refresh();
-        toast('Đã đẩy sản phẩm lên team ✓');
-      } catch (e) {
-        if (e && e.message === 'cancelled') return;
-        toast(e.message || 'Đẩy team thất bại');
-      }
-    };
-queueDeviceCloudSave();
+      });
     };
     const btnMove = $('#btnMovePersonal');
     if (btnMove) btnMove.onclick = async () => {
@@ -1820,26 +1873,22 @@ queueDeviceCloudSave();
       const p = products.find((x) => x.id === currentId);
       if (!p || !canEditProduct(p)) { toast('Không có quyền'); return; }
       if (!confirm('Gỡ khỏi team và giữ bản riêng trên máy bạn?')) return;
-      try {
+      await withSaving({ key: 'move-personal', btn: btnMove, successToast: 'Đã lưu' }, async () => {
         await ensureMyDeviceId();
         const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
         await VCTeamShare.deleteTeamProduct({ productId: p.id, deviceId: myDeviceId, teamToken: tok });
-      } catch (e) {
-        toast(e.message || 'Không gỡ team được');
-        return;
-      }
-      await putProduct({
-        ...p,
-        personal: true,
-        teamShared: false,
-        source: 'personal',
-        updatedAt: Date.now()
+        await putProduct({
+          ...p,
+          personal: true,
+          teamShared: false,
+          source: 'personal',
+          updatedAt: Date.now()
+        });
+        products = await getAll();
+        hideOverlay('#detailOverlay');
+        refresh();
+        queueDeviceCloudSave();
       });
-      products = await getAll();
-      hideOverlay('#detailOverlay');
-      refresh();
-      toast('Đã chuyển về chỉ mình tôi');
-      queueDeviceCloudSave();
     };
     $('#btnEdit').onclick = () => {
       const p = products.find((x) => x.id === currentId);
@@ -1848,23 +1897,20 @@ queueDeviceCloudSave();
     };
     $('#btnDelete').onclick = async () => {
       if (!currentId || !confirm('Xóa sản phẩm này và mọi mẫu câu?')) return;
-      const doomed = products.find((x) => x.id === currentId);
-      if (doomed && (doomed.teamShared || doomed.source === 'team')) {
-        try {
+      const btn = $('#btnDelete');
+      await withSaving({ key: 'delete-product', btn, busyLabel: 'Đang xóa…', successToast: 'Đã lưu' }, async () => {
+        const doomed = products.find((x) => x.id === currentId);
+        if (doomed && (doomed.teamShared || doomed.source === 'team')) {
           await ensureMyDeviceId();
           const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
           await VCTeamShare.deleteTeamProduct({ productId: currentId, deviceId: myDeviceId, teamToken: tok });
-        } catch (e) {
-          toast(e.message || 'Không xóa được trên team');
-          return;
         }
-      }
-      await deleteProduct(currentId);
-      products = await getAll();
-      hideOverlay('#detailOverlay');
-      refresh();
-      toast('Đã xóa');
-      queueDeviceCloudSave();
+        await deleteProduct(currentId);
+        products = await getAll();
+        hideOverlay('#detailOverlay');
+        refresh();
+        queueDeviceCloudSave();
+      });
     };
 
     // Variant tabs
@@ -1898,22 +1944,18 @@ queueDeviceCloudSave();
         if (!canEditProduct(p)) { toast('Không có quyền'); return; }
         const idx = Number(rmImg.dataset.rmImg);
         if (!confirm('Xóa ảnh này khỏi sản phẩm?')) return;
-        p.images.splice(idx, 1);
-        p.updatedAt = Date.now();
-        try {
+        await withSaving({ key: 'rm-img:' + (p.id || '') + ':' + idx, btn: rmImg, busyLabel: 'Đang xóa…', successToast: 'Đã lưu' }, async () => {
+          p.images.splice(idx, 1);
+          p.updatedAt = Date.now();
           if (isTeamVisibleProduct(p)) {
             await pushProductToTeam(p, { basedOnAdmin: !!(p.basedOnAdmin || p.source === 'admin') });
-            toast('Đã xóa ảnh (team)');
           } else {
             await putProduct(p);
-            toast('Đã xóa ảnh');
             queueDeviceCloudSave();
           }
           products = await getAll();
           openDetail(p.id);
-        } catch (err) {
-          toast(err.message || 'Xóa ảnh thất bại');
-        }
+        });
         return;
       }
 
@@ -1925,11 +1967,11 @@ queueDeviceCloudSave();
         const im = p.images[idx];
         if (!im || !im.teamExtra) return;
         if (!confirm('Xóa ảnh này khỏi team?')) return;
-        try {
+        await withSaving({ key: 'rm-extra:' + (p.id || '') + ':' + idx, btn: rmExtra, busyLabel: 'Đang xóa…', successToast: 'Đã lưu' }, async () => {
           await ensureMyDeviceId();
           if (!teamKey) {
             const ok = await ensureUnlockedForSync();
-            if (!ok || !teamKey) { toast('Cần mật khẩu đội'); return; }
+            if (!ok || !teamKey) throw new Error('Cần mật khẩu đội');
           }
           const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
           await VCTeamShare.deleteProductExtraImage({
@@ -1943,11 +1985,8 @@ queueDeviceCloudSave();
           await putProduct(p);
           products = await getAll();
           openDetail(p.id);
-          toast('Đã xóa ảnh khỏi team');
           queueDeviceCloudSave();
-        } catch (err) {
-          toast(err.message || 'Xóa thất bại');
-        }
+        });
         return;
       }
 
@@ -2158,16 +2197,21 @@ queueDeviceCloudSave();
     $('#btnAddImagesDetail').onclick = () => {
       // reuse picker then attach to current product
       const picker = $('#imagePicker');
+      const btnAdd = $('#btnAddImagesDetail');
       const handler = async (e) => {
         picker.removeEventListener('change', handler);
         const p = products.find((x) => x.id === currentId);
         if (!p) return;
-        const files = [...(e.target.files || [])];
+        const files = [...(e.target.files || [])].filter((f) => f.type.startsWith('image/'));
         picker.value = '';
-        for (const file of files) {
-          if ((p.images||[]).length >= MAX_IMAGES) break;
-          if (!file.type.startsWith('image/')) continue;
-          try {
+        if (!files.length) return;
+        await withSaving({ key: 'add-img-detail:' + p.id, btn: btnAdd, busyLabel: 'Đang tải ảnh…', successToast: 'Đã lưu' }, async (ctx) => {
+          const room = Math.max(0, MAX_IMAGES - (p.images || []).length);
+          const batch = files.slice(0, room);
+          let n = 0;
+          for (const file of batch) {
+            n += 1;
+            ctx.setProgress('Đang tải ảnh ' + n + '/' + batch.length);
             const processed = await processImageFile(file);
             p.images = p.images || [];
             p.images.push({
@@ -2178,24 +2222,18 @@ queueDeviceCloudSave();
               hasFull: true,
               hasThumb: true
             });
-          } catch (_) {}
-        }
-        p.updatedAt = Date.now();
-        if (isTeamVisibleProduct(p)) {
-          try {
-            await pushProductToTeam(p, { basedOnAdmin: !!(p.basedOnAdmin || p.source === 'admin') });
-            toast('Đã thêm ảnh (team)');
-          } catch (e) {
-            toast(e.message || 'Lưu team thất bại');
-            return;
           }
-        } else {
-          await putProduct(p);
-          toast('Đã thêm ảnh');
-          queueDeviceCloudSave();
-        }
-        products = await getAll();
-        openDetail(p.id);
+          p.updatedAt = Date.now();
+          ctx.setProgress('Đang lưu…');
+          if (isTeamVisibleProduct(p)) {
+            await pushProductToTeam(p, { basedOnAdmin: !!(p.basedOnAdmin || p.source === 'admin') });
+          } else {
+            await putProduct(p);
+            queueDeviceCloudSave();
+          }
+          products = await getAll();
+          openDetail(p.id);
+        });
       };
       picker.addEventListener('change', handler);
       picker.click();
@@ -2203,30 +2241,40 @@ queueDeviceCloudSave();
     $('#imagePicker').addEventListener('change', async (e) => {
       // only for edit form (detail uses one-shot handler)
       if ($('#editOverlay').hidden) return;
-      const files = [...(e.target.files || [])];
+      const files = [...(e.target.files || [])].filter((f) => f.type.startsWith('image/'));
       e.target.value = '';
-      for (const file of files) {
-        if (editImages.length >= MAX_IMAGES) break;
-        if (!file.type.startsWith('image/')) continue;
-        try {
-          const processed = await processImageFile(file);
-          editImages.push({
-            id: uid(),
-            blob: processed.fullBlob,
-            url: processed.fullDataURL,
-            dataURL: processed.fullDataURL,
-            thumbDataURL: processed.thumbDataURL,
-            source: 'local',
-            hasFull: true,
-            hasThumb: true
-          });
-        } catch (_) { toast('Lỗi ảnh'); }
-      }
-      renderEditImages();
+      if (!files.length) return;
+      const btnAdd = $('#btnAddImg');
+      await withSaving({ key: 'edit-add-img', btn: btnAdd, busyLabel: 'Đang tải ảnh…', successToast: null }, async (ctx) => {
+        const room = Math.max(0, MAX_IMAGES - editImages.length);
+        const batch = files.slice(0, room);
+        let n = 0;
+        for (const file of batch) {
+          n += 1;
+          ctx.setProgress('Đang tải ảnh ' + n + '/' + batch.length);
+          try {
+            const processed = await processImageFile(file);
+            editImages.push({
+              id: uid(),
+              blob: processed.fullBlob,
+              url: processed.fullDataURL,
+              dataURL: processed.fullDataURL,
+              thumbDataURL: processed.thumbDataURL,
+              source: 'local',
+              hasFull: true,
+              hasThumb: true
+            });
+          } catch (_) {
+            throw new Error('Lỗi ảnh');
+          }
+        }
+        renderEditImages();
+      });
     });
 
     $('#editForm').addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (savingLocks.has('editForm')) return;
       syncEditVariantsFromDom();
       const title = $('#editTitleInput').value.trim();
       if (!title) { toast('Nhập tên sản phẩm'); return; }
@@ -2236,17 +2284,9 @@ queueDeviceCloudSave();
       if (!variants.length) { toast('Cần ít nhất 1 mẫu có nội dung'); return; }
       const id = $('#editId').value || uid();
       const prev = products.find((x) => x.id === id);
-      const images = [];
-      for (const im of editImages) images.push({
-        id: im.id,
-        dataURL: im.dataURL || await blobToDataURL(im.blob),
-        thumbDataURL: im.thumbDataURL || null,
-        source: im.source || 'local',
-        path: im.path || null,
-        hash: im.hash || null,
-        hasFull: true,
-        hasThumb: !!im.thumbDataURL
-      });
+      const btnSave = $('#btnSaveProduct') || (e.submitter && e.submitter.closest('button')) || e.submitter;
+      const formEl = $('#editForm');
+
       let wantTeam = !!( $('#scopeTeam') && $('#scopeTeam').checked );
       let personalFlag = !wantTeam;
       let teamShared = wantTeam;
@@ -2258,6 +2298,7 @@ queueDeviceCloudSave();
         personalFlag = false;
         teamShared = true;
       }
+      // Unlock / name prompts BEFORE spinner (user interaction)
       if (wantTeam) {
         await ensureMyDeviceId();
         if (!myDeviceId) { toast('Không tạo được mã máy'); return; }
@@ -2275,47 +2316,54 @@ queueDeviceCloudSave();
         authorName = staffDisplayName;
       }
 
-      const product = {
-        id, title,
-        category: $('#editCategory').value.trim() || 'Khác',
-        variants, images,
-        pinned: prev ? !!prev.pinned : false,
-        pinOrder: prev && prev.pinned ? prev.pinOrder : null,
-        personal: personalFlag,
-        teamShared: teamShared,
-        source: wantTeam ? 'team' : 'personal',
-        authorDeviceId: authorDeviceId || null,
-        authorName: authorName || '',
-        sortOrder: prev ? prev.sortOrder : products.length,
-        createdAt: prev ? prev.createdAt : Date.now(),
-        updatedAt: Date.now()
-      };
+      await withSaving({ key: 'editForm', btn: btnSave, form: formEl, busyLabel: 'Đang lưu…', successToast: 'Đã lưu' }, async (ctx) => {
+        const images = [];
+        const total = editImages.length;
+        let i = 0;
+        for (const im of editImages) {
+          i += 1;
+          if (total > 1) ctx.setProgress('Đang tải ảnh ' + i + '/' + total);
+          images.push({
+            id: im.id,
+            dataURL: im.dataURL || await blobToDataURL(im.blob),
+            thumbDataURL: im.thumbDataURL || null,
+            source: im.source || 'local',
+            path: im.path || null,
+            hash: im.hash || null,
+            hasFull: true,
+            hasThumb: !!im.thumbDataURL
+          });
+        }
+        ctx.setProgress('Đang lưu…');
+        const product = {
+          id, title,
+          category: $('#editCategory').value.trim() || 'Khác',
+          variants, images,
+          pinned: prev ? !!prev.pinned : false,
+          pinOrder: prev && prev.pinned ? prev.pinOrder : null,
+          personal: personalFlag,
+          teamShared: teamShared,
+          source: wantTeam ? 'team' : 'personal',
+          authorDeviceId: authorDeviceId || null,
+          authorName: authorName || '',
+          sortOrder: prev ? prev.sortOrder : products.length,
+          createdAt: prev ? prev.createdAt : Date.now(),
+          updatedAt: Date.now()
+        };
 
-      if (wantTeam) {
-        try {
+        if (wantTeam) {
           const saved = await pushProductToTeam(product, {
             basedOnAdmin: !!(prev && (prev.source === 'admin' || prev.basedOnAdmin))
           });
           Object.assign(product, saved, { personal: false, teamShared: true, teamProduct: true, source: 'team' });
-          toast('Đã lưu cho team ✓');
-        } catch (e) {
-          if (e && e.message === 'cancelled') return;
-          toast(e.message || 'Lưu team thất bại');
-          return;
         }
-      }
 
-      await putProduct(product);
-      products = await getAll();
-      hideOverlay('#editOverlay');
-      refresh();
-      if (!wantTeam) {
-        toast('Đã lưu (chỉ mình tôi)');
+        await putProduct(product);
+        products = await getAll();
+        hideOverlay('#editOverlay');
+        refresh();
         queueDeviceCloudSave();
-      } else {
-        // Remove from personal-only cloud footprint: already marked not personal
-        queueDeviceCloudSave();
-      }
+      });
     });
 
     $('#btnExport').onclick = () => {

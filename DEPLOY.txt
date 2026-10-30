@@ -1,4 +1,4 @@
-VibeChic Mẫu tin — phone PWA v11
+VibeChic Mẫu tin — phone PWA v25
 
 Team data (encrypted):
   https://vibechic-admin.tusinh-information.workers.dev/public/...
@@ -14,4 +14,4 @@ Settings → Mã khôi phục (copy) / Khôi phục từ mã
 Auto-save personal products + pins after local edits (debounced)
 
 Admin: https://vibechic-admin.tusinh-information.workers.dev/
-SW cache: vibechic-templates-v11
+SW cache: vibechic-templates-v25

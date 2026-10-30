@@ -165,24 +165,44 @@
       id,
       title: (raw.title || '').trim() || 'Không tiêu đề',
       category: (raw.category || 'Khác').trim() || 'Khác',
-      images: Array.isArray(raw.images) ? raw.images.filter((im) => im && (im.dataURL || im.dataUrl || im.path || im.url)).map((im, i) => ({
-        id: im.id || uid(),
-        source: im.source || (im.path || (im.url && !String(im.url).startsWith('data:')) ? 'synced' : 'local'),
-        path: im.path || null,
-        hash: im.hash || null,
-        url: im.url || null,
-        dataURL: im.dataURL || im.dataUrl || null,
-        sortOrder: im.sortOrder != null ? im.sortOrder : i
-      })) : [],
+      images: Array.isArray(raw.images) ? raw.images.filter((im) => im && (
+        im.dataURL || im.dataUrl || im.thumbDataURL || im.path || im.url ||
+        im.teamExtra || im.teamImage || im.source === 'team' || im.hasFull || im.hasThumb
+      )).map((im, i) => {
+        const src = im.source || (im.path || (im.url && !String(im.url).startsWith('data:')) ? 'synced' : 'local');
+        const teamExtra = !!(im.teamExtra || (src === 'team' && (im.teamImage || im.teamExtra) && !im.path));
+        const out = {
+          id: im.id || uid(),
+          source: teamExtra ? 'team' : src,
+          path: im.path || null,
+          hash: im.hash || null,
+          url: im.url || null,
+          dataURL: im.dataURL || im.dataUrl || null,
+          thumbDataURL: im.thumbDataURL || null,
+          hasFull: im.hasFull != null ? !!im.hasFull : !!(im.dataURL || im.dataUrl || im.path),
+          hasThumb: im.hasThumb != null ? !!im.hasThumb : !!(im.thumbDataURL || im.path),
+          sortOrder: im.sortOrder != null ? im.sortOrder : i
+        };
+        if (teamExtra || im.teamImage || src === 'team') {
+          out.teamImage = true;
+          if (im.teamExtra || teamExtra || (src === 'team' && !im.path)) out.teamExtra = true;
+        }
+        if (im.authorDeviceId) out.authorDeviceId = im.authorDeviceId;
+        if (im.authorName) out.authorName = im.authorName;
+        return out;
+      }) : [],
       variants,
       sortOrder: raw.sortOrder != null ? raw.sortOrder : 0,
       pinned: !!raw.pinned,
       pinOrder: raw.pinned ? (raw.pinOrder != null ? Number(raw.pinOrder) : 0) : null,
-      personal: !!raw.personal,
-      teamShared: !!raw.teamShared || raw.source === 'team',
-      source: raw.source || (raw.personal ? 'personal' : (raw.teamShared ? 'team' : 'admin')),
+      personal: !!raw.personal && !raw.teamShared && raw.source !== 'team',
+      teamShared: !!raw.teamShared || raw.source === 'team' || !!raw.teamProduct,
+      teamProduct: !!raw.teamProduct || raw.source === 'team',
+      basedOnAdmin: !!raw.basedOnAdmin,
+      source: raw.source || (raw.personal && !raw.teamShared ? 'personal' : (raw.teamShared || raw.teamProduct ? 'team' : 'admin')),
       authorDeviceId: raw.authorDeviceId || null,
       authorName: raw.authorName || '',
+      remoteUpdatedAt: raw.remoteUpdatedAt || null,
       createdAt: raw.createdAt || Date.now(),
       updatedAt: raw.updatedAt || Date.now()
     };

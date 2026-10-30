@@ -77,6 +77,7 @@
       <div class="detail-secondary">
         <button type="button" class="btn btn-ghost btn-sm" id="btnLocalPin">📌 Ghim</button>
         <button type="button" class="btn btn-ghost btn-sm" id="btnHideItem" hidden>🙈 Ẩn</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnPushProduct" hidden>👥 Đẩy sản phẩm lên team</button>
         <button type="button" class="btn btn-ghost btn-sm" id="btnMovePersonal" hidden>↩️ Về riêng mình</button>
       </div>
       <div class="detail-secondary">
@@ -130,7 +131,7 @@
               Đẩy cho team <span style="color:var(--muted);font-weight:400">(mọi máy đội thấy)</span>
             </label>
           </div>
-          <p style="margin:8px 0 0;font-size:0.8rem;color:var(--muted)">Mẫu đội cần mật khẩu đội. Bạn có thể sửa/xóa mục mình đã đẩy.</p>
+          <p style="margin:8px 0 0;font-size:0.8rem;color:var(--muted)">Sản phẩm team: cả đội thêm/sửa/xóa mẫu câu và ảnh — đồng bộ mọi máy. Sản phẩm riêng chỉ mình bạn.</p>
         </div>
 
         <div class="sheet-actions">
@@ -262,6 +263,7 @@
   <script src="shared.js"></script>
   <script src="crypto.js"></script>
   <script src="device-cloud.js"></script>
+  <script src="media-cache.js"></script>
   <script src="team-share.js"></script>
   <script src="pull-refresh.js"></script>
   <script src="app.js"></script>

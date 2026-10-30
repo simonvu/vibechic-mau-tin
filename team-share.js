@@ -1,4 +1,4 @@
-/* Team-contributed items — encrypted with team key, stored under Worker /team/* */
+/* Team products — encrypted per-product store on Worker /team/products + images/thumbs */
 (function (global) {
   'use strict';
 
@@ -20,13 +20,13 @@
     return 'data:image/jpeg;base64,' + C().b64encode(bytes);
   }
 
-  async function teamFetch(path, { method, deviceId, teamToken, body, meta } = {}) {
+  async function teamFetch(path, { method, deviceId, teamToken, body, meta, ifUpdatedAt } = {}) {
     const writing = method === 'PUT' || method === 'DELETE' || method === 'POST';
     const headers = { 'Content-Type': 'application/json; charset=utf-8' };
     if (teamToken) headers['X-VC-Team-Token'] = teamToken;
     if (deviceId) headers['Authorization'] = 'Bearer ' + deviceId;
+    if (ifUpdatedAt) headers['X-VC-If-Updated-At'] = ifUpdatedAt;
     if (meta) {
-      // Header must be ByteString — base64(utf8 JSON) avoids non-ASCII (vi titles)
       const json = JSON.stringify(meta);
       headers['X-VC-Item-Meta'] = btoa(unescape(encodeURIComponent(json)));
       headers['X-VC-Item-Meta-Enc'] = 'b64';
@@ -41,128 +41,175 @@
     return res;
   }
 
-  async function listTeamItems(teamToken) {
-    const res = await teamFetch('/items', { method: 'GET', teamToken });
-    if (!res.ok) throw new Error('list team HTTP ' + res.status);
+  async function listTeamProducts(teamToken, since) {
+    const q = since ? ('?since=' + encodeURIComponent(since)) : '';
+    const res = await teamFetch('/products' + q, { method: 'GET', teamToken });
+    if (!res.ok) throw new Error('list products HTTP ' + res.status);
     const j = await res.json();
     return j.items || [];
   }
 
-  async function fetchAndDecryptItem(itemId, teamKey, teamToken) {
-    const res = await teamFetch('/items/' + encodeURIComponent(itemId), { method: 'GET', teamToken });
-    if (!res.ok) throw new Error('item HTTP ' + res.status);
+  async function fetchAndDecryptProduct(productId, teamKey, teamToken) {
+    const res = await teamFetch('/products/' + encodeURIComponent(productId), { method: 'GET', teamToken });
+    if (!res.ok) throw new Error('product HTTP ' + res.status);
     const enc = await res.json();
     if (!C().isEncryptedEnvelope(enc)) throw new Error('bad envelope');
     const text = await C().decryptText(teamKey, enc);
     return JSON.parse(text);
   }
 
-  async function hydrateTeamImages(product, teamKey, teamToken) {
-    const imgs = [];
-    for (const im of (product.images || [])) {
-      if (im.teamPath || im.source === 'team' || (im.id && !im.dataURL && !im.path)) {
-        const imageId = im.id;
-        try {
-          const r = await teamFetch('/images/' + encodeURIComponent(imageId), { method: 'GET', teamToken });
-          if (r.ok) {
-            const env = await r.json();
-            const bytes = await C().decryptBytes(teamKey, env);
-            imgs.push({
-              ...im,
-              id: imageId,
-              dataURL: bytesToJpegDataURL(bytes),
-              source: 'team',
-              teamImage: true
-            });
-            continue;
-          }
-        } catch (e) { console.warn('team img', imageId, e); }
-      }
-      if (im.path && !im.dataURL) {
-        imgs.push(im); // admin public path — caller may hydrate via ensureImageCached
-      } else {
-        imgs.push(im);
-      }
+  async function putEncryptedBlob(path, bytes, teamKey, deviceId, teamToken) {
+    const env = await C().encryptBytes(teamKey, bytes);
+    const put = await teamFetch(path, {
+      method: 'PUT', deviceId, teamToken, body: JSON.stringify(env)
+    });
+    if (!put.ok) {
+      const err = await put.json().catch(() => ({}));
+      throw new Error(err.error || ('upload HTTP ' + put.status));
     }
-    product.images = imgs;
-    return product;
+    return put.json().catch(() => ({}));
   }
 
-  async function pushTeamItem({
-    product, teamKey, teamToken, deviceId, authorName
+  async function fetchDecryptImage(path, teamKey, teamToken) {
+    const r = await teamFetch(path, { method: 'GET', teamToken });
+    if (!r.ok) return null;
+    const env = await r.json();
+    const bytes = await C().decryptBytes(teamKey, env);
+    return bytesToJpegDataURL(bytes);
+  }
+
+  /** Pack product for team store: no full dataURLs — only refs + optional thumbDataURL kept client-side */
+  function packProductForTeam(product, { deviceId, authorName, basedOnAdmin }) {
+    const packedImages = [];
+    const imageIds = [];
+    const thumbIds = [];
+    for (let j = 0; j < (product.images || []).length; j++) {
+      const im = product.images[j];
+      const iid = im.id || ('timg-' + String(product.id).slice(0, 8) + '-' + j);
+      const entry = {
+        id: iid,
+        sortOrder: j,
+        source: im.path ? 'synced' : 'team',
+        teamImage: !im.path,
+        hasFull: !!(im.dataURL || im.hasFull || im.path),
+        hasThumb: !!(im.thumbDataURL || im.hasThumb || im.thumbId)
+      };
+      if (im.path) {
+        entry.path = im.path;
+        entry.hash = im.hash || null;
+        entry.source = 'synced';
+      } else {
+        imageIds.push(iid);
+        thumbIds.push(iid);
+        entry.teamImage = true;
+        entry.source = 'team';
+      }
+      if (im.authorDeviceId) entry.authorDeviceId = im.authorDeviceId;
+      if (im.authorName) entry.authorName = im.authorName;
+      packedImages.push(entry);
+    }
+    const now = Date.now();
+    return {
+      payload: {
+        v: 2,
+        kind: 'team-product',
+        authorDeviceId: product.authorDeviceId || deviceId,
+        authorName: (authorName || product.authorName || '').trim().slice(0, 40),
+        lastEditorDeviceId: deviceId,
+        lastEditorName: (authorName || '').trim().slice(0, 40),
+        updatedAt: new Date().toISOString(),
+        product: {
+          id: product.id,
+          title: product.title,
+          category: product.category,
+          variants: product.variants || [],
+          images: packedImages,
+          personal: false,
+          teamShared: true,
+          teamProduct: true,
+          basedOnAdmin: !!(basedOnAdmin || product.basedOnAdmin),
+          source: 'team',
+          authorDeviceId: product.authorDeviceId || deviceId,
+          authorName: (authorName || product.authorName || '').trim().slice(0, 40),
+          sortOrder: product.sortOrder || 0,
+          pinned: !!product.pinned,
+          pinOrder: product.pinned ? product.pinOrder : null,
+          createdAt: product.createdAt || now,
+          updatedAt: now
+        }
+      },
+      imageIds,
+      thumbIds
+    };
+  }
+
+  /**
+   * Push whole product to team (LWW). Uploads full + thumb for local/team images that have dataURL.
+   * Admin path images are referenced only (no re-upload).
+   */
+  async function pushTeamProduct({
+    product, teamKey, teamToken, deviceId, authorName, ifUpdatedAt, basedOnAdmin
   }) {
     if (!teamKey) throw new Error('Chưa mở khóa mật khẩu đội');
     if (!teamToken) throw new Error('Thiếu team write token');
     if (!deviceId) throw new Error('Thiếu device id');
     const id = product.id;
-    const imageIds = [];
-    const packedImages = [];
+
     for (let j = 0; j < (product.images || []).length; j++) {
       const im = product.images[j];
-      const iid = im.id || ('timg-' + id.slice(0, 8) + '-' + j);
+      if (im.path) continue; // admin public
+      const iid = im.id || ('timg-' + String(id).slice(0, 8) + '-' + j);
+      im.id = iid;
       if (im.dataURL) {
         const bytes = dataURLToBytes(im.dataURL);
-        const env = await C().encryptBytes(teamKey, bytes);
-        const put = await teamFetch('/images/' + encodeURIComponent(iid), {
-          method: 'PUT', deviceId, teamToken, body: JSON.stringify(env)
-        });
-        if (!put.ok) {
-          const err = await put.json().catch(() => ({}));
-          throw new Error(err.error || ('ảnh team HTTP ' + put.status));
-        }
-        imageIds.push(iid);
-        packedImages.push({ id: iid, source: 'team', teamImage: true, sortOrder: j });
-      } else if (im.path) {
-        packedImages.push({
-          id: im.id || iid, source: 'synced', path: im.path, hash: im.hash || null, sortOrder: j
-        });
+        await putEncryptedBlob('/images/' + encodeURIComponent(iid), bytes, teamKey, deviceId, teamToken);
+        im.hasFull = true;
+      }
+      if (im.thumbDataURL) {
+        const tbytes = dataURLToBytes(im.thumbDataURL);
+        await putEncryptedBlob('/thumbs/' + encodeURIComponent(iid), tbytes, teamKey, deviceId, teamToken);
+        im.hasThumb = true;
+      } else if (im.dataURL) {
+        // fallback: use full as thumb if no separate thumb (caller should make one)
+        const bytes = dataURLToBytes(im.dataURL);
+        await putEncryptedBlob('/thumbs/' + encodeURIComponent(iid), bytes, teamKey, deviceId, teamToken);
+        im.hasThumb = true;
       }
     }
-    const payload = {
-      v: 1,
-      kind: 'team-item',
-      authorDeviceId: deviceId,
-      authorName: (authorName || '').trim().slice(0, 40),
-      updatedAt: new Date().toISOString(),
-      product: {
-        id,
-        title: product.title,
-        category: product.category,
-        variants: product.variants || [],
-        images: packedImages,
-        personal: false,
-        teamShared: true,
-        source: 'team',
-        authorDeviceId: deviceId,
-        authorName: (authorName || '').trim().slice(0, 40),
-        sortOrder: product.sortOrder || 0,
-        pinned: false,
-        pinOrder: null,
-        createdAt: product.createdAt || Date.now(),
-        updatedAt: Date.now()
-      }
-    };
+
+    const { payload, imageIds, thumbIds } = packProductForTeam(product, { deviceId, authorName, basedOnAdmin });
     const enc = await C().encryptText(teamKey, JSON.stringify(payload));
-    const res = await teamFetch('/items/' + encodeURIComponent(id), {
+    const res = await teamFetch('/products/' + encodeURIComponent(id), {
       method: 'PUT',
       deviceId,
       teamToken,
       body: JSON.stringify(enc),
+      ifUpdatedAt,
       meta: {
         authorName: payload.authorName,
+        lastEditorName: payload.lastEditorName,
         imageIds,
-        titleHint: String(product.title || '').slice(0, 80)
+        thumbIds,
+        titleHint: String(product.title || '').slice(0, 80),
+        basedOnAdmin: !!(basedOnAdmin || product.basedOnAdmin)
       }
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        const e = new Error('conflict');
+        e.conflict = true;
+        e.currentUpdatedAt = err.currentUpdatedAt;
+        throw e;
+      }
       throw new Error(err.error || ('push HTTP ' + res.status));
     }
-    return { ok: true, product: payload.product, meta: (await res.json()).meta };
+    const j = await res.json();
+    return { ok: true, product: payload.product, meta: j.meta, remoteUpdatedAt: j.meta && j.meta.updatedAt };
   }
 
-  async function deleteTeamItem({ itemId, deviceId, teamToken }) {
-    const res = await teamFetch('/items/' + encodeURIComponent(itemId), {
+  async function deleteTeamProduct({ productId, deviceId, teamToken }) {
+    const res = await teamFetch('/products/' + encodeURIComponent(productId), {
       method: 'DELETE', deviceId, teamToken
     });
     if (!res.ok) {
@@ -172,85 +219,136 @@
     return res.json();
   }
 
-  async function pullAllTeamProducts({ teamKey, teamToken }) {
-    const metas = await listTeamItems(teamToken);
+  /** Hydrate thumb into image (from cache or network). Does not fetch full. */
+  async function hydrateThumb(im, teamKey, teamToken) {
+    if (!im || im.path) return im; // admin — use public URL / ensureImageCached separately
+    if (im.thumbDataURL) return im;
+    const Cache = global.VCMediaCache;
+    if (Cache) {
+      const cached = await Cache.getThumb(im.id);
+      if (cached) {
+        im.thumbDataURL = cached;
+        return im;
+      }
+    }
+    if (!teamKey || !teamToken || !im.id) return im;
+    try {
+      const dataURL = await fetchDecryptImage('/thumbs/' + encodeURIComponent(im.id), teamKey, teamToken);
+      if (dataURL) {
+        im.thumbDataURL = dataURL;
+        im.hasThumb = true;
+        if (Cache) await Cache.putThumb(im.id, dataURL);
+      }
+    } catch (e) {
+      console.warn('thumb', im.id, e);
+    }
+    return im;
+  }
+
+  /** Hydrate full image for detail/lightbox/share. */
+  async function hydrateFull(im, teamKey, teamToken) {
+    if (!im) return im;
+    if (im.dataURL) return im;
+    if (im.path) return im; // caller uses ensureImageCached for public
+    const Cache = global.VCMediaCache;
+    if (Cache) {
+      const cached = await Cache.getFull(im.id);
+      if (cached) {
+        im.dataURL = cached;
+        return im;
+      }
+    }
+    if (!teamKey || !teamToken || !im.id) return im;
+    try {
+      const dataURL = await fetchDecryptImage('/images/' + encodeURIComponent(im.id), teamKey, teamToken);
+      if (dataURL) {
+        im.dataURL = dataURL;
+        im.hasFull = true;
+        if (Cache) await Cache.putFull(im.id, dataURL);
+      }
+    } catch (e) {
+      console.warn('full img', im.id, e);
+    }
+    return im;
+  }
+
+  /**
+   * Incremental pull: only products with meta.updatedAt > since.
+   * Returns { products, newestUpdatedAt } without full image bytes (thumbs optional lazy).
+   */
+  async function pullTeamProductsIncremental({ teamKey, teamToken, since }) {
+    const metas = await listTeamProducts(teamToken, since || '');
     const out = [];
+    let newest = since || '';
     for (const m of metas) {
       try {
-        const raw = await fetchAndDecryptItem(m.id, teamKey, teamToken);
+        if (m.updatedAt && m.updatedAt > newest) newest = m.updatedAt;
+        const raw = await fetchAndDecryptProduct(m.id, teamKey, teamToken);
         let product = raw.product || raw;
         product = {
           ...product,
           personal: false,
           teamShared: true,
+          teamProduct: true,
+          basedOnAdmin: !!(product.basedOnAdmin || m.basedOnAdmin),
           source: 'team',
-          authorDeviceId: raw.authorDeviceId || product.authorDeviceId || m.authorDeviceId,
-          authorName: raw.authorName || product.authorName || m.authorName || ''
+          authorDeviceId: raw.authorDeviceId || product.authorDeviceId || m.createdByDeviceId || m.authorDeviceId,
+          authorName: raw.authorName || product.authorName || m.lastEditorName || m.authorName || '',
+          remoteUpdatedAt: m.updatedAt || raw.updatedAt || null,
+          // strip any accidental dataURLs from payload
+          images: (product.images || []).map((im) => {
+            const { dataURL, thumbDataURL, ...rest } = im || {};
+            return {
+              ...rest,
+              id: im.id,
+              source: im.path ? 'synced' : 'team',
+              teamImage: !im.path,
+              hasFull: im.hasFull !== false && !im.path,
+              hasThumb: im.hasThumb !== false && !im.path
+            };
+          })
         };
-        await hydrateTeamImages(product, teamKey, teamToken);
         out.push(product);
       } catch (e) {
-        console.warn('team item', m.id, e);
+        console.warn('team product', m.id, e);
       }
     }
-    return out;
+    return { products: out, newestUpdatedAt: newest, metas };
   }
 
+  // ---- Legacy adapters (items + extras) kept for migration / old clients ----
 
-  async function pushProductExtraImage({
-    productId, image, teamKey, teamToken, deviceId, authorName
-  }) {
-    if (!teamKey) throw new Error('Chưa mở khóa mật khẩu đội');
-    if (!teamToken) throw new Error('Thiếu team write token');
-    if (!deviceId) throw new Error('Thiếu device id');
-    if (!productId) throw new Error('Thiếu product id');
-    if (!image || !image.dataURL) throw new Error('Thiếu ảnh');
-    const imageId = image.id || ('tex-' + String(productId).slice(0, 8) + '-' + Date.now().toString(36));
-    const bytes = dataURLToBytes(image.dataURL);
-    const env = await C().encryptBytes(teamKey, bytes);
-    const put = await teamFetch(
-      '/extras/' + encodeURIComponent(productId) + '/images/' + encodeURIComponent(imageId),
-      {
-        method: 'PUT',
-        deviceId,
-        teamToken,
-        body: JSON.stringify(env),
-        meta: { authorName: (authorName || '').trim().slice(0, 40) }
+  async function listTeamItems(teamToken) {
+    const res = await teamFetch('/items', { method: 'GET', teamToken });
+    if (!res.ok) throw new Error('list team HTTP ' + res.status);
+    const j = await res.json();
+    return j.items || [];
+  }
+
+  async function pushTeamItem(opts) {
+    // Compat: route to pushTeamProduct
+    return pushTeamProduct(opts);
+  }
+
+  async function deleteTeamItem({ itemId, deviceId, teamToken }) {
+    // Try products first, then legacy items
+    try {
+      return await deleteTeamProduct({ productId: itemId, deviceId, teamToken });
+    } catch (_) {
+      const res = await teamFetch('/items/' + encodeURIComponent(itemId), {
+        method: 'DELETE', deviceId, teamToken
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || ('delete HTTP ' + res.status));
       }
-    );
-    if (!put.ok) {
-      const err = await put.json().catch(() => ({}));
-      throw new Error(err.error || ('đẩy ảnh team HTTP ' + put.status));
+      return res.json();
     }
-    const j = await put.json().catch(() => ({}));
-    return {
-      ok: true,
-      image: {
-        id: imageId,
-        dataURL: image.dataURL,
-        source: 'team',
-        teamImage: true,
-        teamExtra: true,
-        authorDeviceId: deviceId,
-        authorName: (authorName || '').trim().slice(0, 40)
-      },
-      meta: j.meta || null,
-      entry: j.entry || null
-    };
   }
 
-  async function deleteProductExtraImage({ productId, imageId, deviceId, teamToken }) {
-    if (!teamToken) throw new Error('Thiếu team write token');
-    if (!deviceId) throw new Error('Thiếu device id');
-    const res = await teamFetch(
-      '/extras/' + encodeURIComponent(productId) + '/images/' + encodeURIComponent(imageId),
-      { method: 'DELETE', deviceId, teamToken }
-    );
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || ('xóa ảnh team HTTP ' + res.status));
-    }
-    return res.json();
+  async function pullAllTeamProducts({ teamKey, teamToken }) {
+    const r = await pullTeamProductsIncremental({ teamKey, teamToken, since: '' });
+    return r.products;
   }
 
   async function listProductExtras(teamToken) {
@@ -270,16 +368,15 @@
       for (const entry of (m.images || [])) {
         if (!entry || !entry.id) continue;
         try {
-          const r = await teamFetch('/images/' + encodeURIComponent(entry.id), { method: 'GET', teamToken });
-          if (!r.ok) continue;
-          const env = await r.json();
-          const bytes = await C().decryptBytes(teamKey, env);
+          const dataURL = await fetchDecryptImage('/images/' + encodeURIComponent(entry.id), teamKey, teamToken);
+          if (!dataURL) continue;
           imgs.push({
             id: entry.id,
-            dataURL: bytesToJpegDataURL(bytes),
+            dataURL,
             source: 'team',
             teamImage: true,
             teamExtra: true,
+            hasFull: true,
             authorDeviceId: entry.authorDeviceId || null,
             authorName: entry.authorName || ''
           });
@@ -292,10 +389,103 @@
     return byProduct;
   }
 
+  /** One-shot: migrate extras into team products if product not yet in /team/products */
+  async function migrateExtrasIntoProducts({ teamKey, teamToken, deviceId, authorName, baseProductsById }) {
+    const extras = await listProductExtras(teamToken);
+    const existing = await listTeamProducts(teamToken, '');
+    const have = new Set(existing.map((m) => m.id));
+    const migrated = [];
+    for (const m of extras) {
+      const pid = m.productId;
+      if (!pid || have.has(pid)) continue;
+      const base = (baseProductsById && baseProductsById[pid]) || null;
+      const extraImgs = [];
+      for (const entry of (m.images || [])) {
+        if (!entry || !entry.id) continue;
+        try {
+          const dataURL = await fetchDecryptImage('/images/' + encodeURIComponent(entry.id), teamKey, teamToken);
+          if (!dataURL) continue;
+          // also ensure thumb exists (reuse full if needed)
+          try {
+            await putEncryptedBlob('/thumbs/' + encodeURIComponent(entry.id), dataURLToBytes(dataURL), teamKey, deviceId, teamToken);
+          } catch (_) {}
+          extraImgs.push({
+            id: entry.id,
+            dataURL,
+            thumbDataURL: dataURL,
+            source: 'team',
+            teamImage: true,
+            hasFull: true,
+            hasThumb: true,
+            authorDeviceId: entry.authorDeviceId,
+            authorName: entry.authorName || ''
+          });
+        } catch (_) {}
+      }
+      if (!extraImgs.length && !base) continue;
+      const product = {
+        id: pid,
+        title: (base && base.title) || m.titleHint || pid,
+        category: (base && base.category) || 'Khác',
+        variants: (base && base.variants) || [{ id: 'v1', label: 'Mẫu chính', html: '<p></p>', sortOrder: 0 }],
+        images: [
+          ...((base && base.images) || []).map((im) => ({
+            id: im.id,
+            path: im.path || null,
+            hash: im.hash || null,
+            source: im.path ? 'synced' : (im.source || 'team'),
+            dataURL: im.dataURL || null,
+            thumbDataURL: im.thumbDataURL || null
+          })),
+          ...extraImgs
+        ],
+        personal: false,
+        teamShared: true,
+        teamProduct: true,
+        basedOnAdmin: !!base,
+        source: 'team',
+        authorDeviceId: (extraImgs[0] && extraImgs[0].authorDeviceId) || deviceId,
+        authorName: (extraImgs[0] && extraImgs[0].authorName) || authorName || '',
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      await pushTeamProduct({
+        product, teamKey, teamToken, deviceId,
+        authorName: product.authorName || authorName || 'team',
+        basedOnAdmin: !!base
+      });
+      migrated.push(pid);
+      have.add(pid);
+    }
+    return migrated;
+  }
+
+  // Deprecated per-image extras API wrappers (kept so old app bits don't crash)
+  async function pushProductExtraImage() {
+    throw new Error('Đã đổi sang đẩy cả sản phẩm — dùng Sửa / Đẩy lên team');
+  }
+  async function deleteProductExtraImage() {
+    throw new Error('Xóa ảnh trong Sửa sản phẩm');
+  }
+
   global.VCTeamShare = {
-    teamBase, listTeamItems, fetchAndDecryptItem, hydrateTeamImages,
-    pushTeamItem, deleteTeamItem, pullAllTeamProducts,
-    pushProductExtraImage, deleteProductExtraImage,
-    listProductExtras, pullAllProductExtras
+    teamBase,
+    listTeamProducts,
+    fetchAndDecryptProduct,
+    pushTeamProduct,
+    deleteTeamProduct,
+    pullTeamProductsIncremental,
+    hydrateThumb,
+    hydrateFull,
+    // legacy
+    listTeamItems,
+    pushTeamItem,
+    deleteTeamItem,
+    pullAllTeamProducts,
+    listProductExtras,
+    pullAllProductExtras,
+    migrateExtrasIntoProducts,
+    pushProductExtraImage,
+    deleteProductExtraImage
   };
 })(typeof window !== 'undefined' ? window : globalThis);

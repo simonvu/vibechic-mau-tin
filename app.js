@@ -11,8 +11,10 @@
   const STORE = 'products';
   const META = 'meta';
   const MAX_IMAGES = 5;
-  const MAX_IMG_EDGE = 1200;
-  const JPEG_QUALITY = 0.82;
+  const MAX_IMG_EDGE = 2048;
+  const THUMB_EDGE = 300;
+  const THUMB_QUALITY = 0.8;
+  const JPEG_QUALITY = 0.92;
 
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -204,6 +206,14 @@
 
   async function resolveImageDataURL(im) {
     if (im && im.dataURL) return im;
+    // Team full image (not admin path) — fetch on demand for copy/share/lightbox
+    if (im && !im.path && im.id && teamKey && window.VCTeamShare) {
+      try {
+        const tok = await ensureTeamWriteToken();
+        await VCTeamShare.hydrateFull(im, teamKey, tok);
+        if (im.dataURL) return im;
+      } catch (e) { console.warn('hydrateFull', e); }
+    }
     let next = await ensureImageCached({ ...(im || {}) });
     if (next.dataURL) return next;
     // Last resort: fetch public URL (may be encrypted JSON — ensureImageCached handles that)
@@ -342,42 +352,36 @@
   }
 
   function renderDetailImages(p) {
-    const box = $('#imageCopyActions');
+    const box = $("#imageCopyActions");
     if (!box) return;
     const imgs = p.images || [];
     if (!imgs.length) {
-      box.innerHTML = '<p style="color:var(--muted);font-size:0.9rem;grid-column:1/-1">Chưa có ảnh</p>';
+      box.innerHTML = "<p style=\"color:var(--muted);font-size:0.9rem;grid-column:1/-1\">Chưa có ảnh</p>";
       updateSendFlowUI(p);
       return;
     }
+    const editable = canEditProduct(p);
+    const teamish = isTeamVisibleProduct(p);
     box.innerHTML = imgs.map((im, i) => {
       const selected = selectedImageIdx.has(i);
-      const personal = im.source === 'local';
-      const isTeamExtra = !!(im.teamExtra || (im.source === 'team' && im.teamImage));
-      const isTeamish = isTeamExtra || im.source === 'team' || im.teamImage;
-      const selClass = multiSelectMode ? ('select-mode' + (selected ? ' selected' : '')) : '';
+      const personal = isPrivateProduct(p) || (im.source === "local" && !im.teamImage && !im.path);
+      const selClass = multiSelectMode ? ("select-mode" + (selected ? " selected" : "")) : "";
       const check = multiSelectMode
-        ? `<span class="img-check" aria-hidden="true">${selected ? '✓' : ''}</span>`
-        : '';
-      const badge = personal
-        ? '<span class="src-icon src-me" title="Ảnh riêng của tôi" aria-label="Riêng mình">🔒</span>'
-        : (isTeamish
-          ? '<span class="src-icon src-team" title="Ảnh của team" aria-label="Team">👥</span>'
-          : '<span class="src-icon src-team" title="Ảnh của team" aria-label="Team">👥</span>');
-      const canRemoveExtra = !multiSelectMode && im.teamExtra && myDeviceId && im.authorDeviceId === myDeviceId;
-      const pushBtn = (!multiSelectMode && personal)
-        ? `<button type="button" class="btn-tile-action btn-push-team" data-push-img="${i}" title="Đẩy lên team" aria-label="Đẩy lên team">👥</button>`
-        : '';
-      const rmBtn = canRemoveExtra
-        ? `<button type="button" class="btn-tile-action btn-rm-extra" data-rm-extra="${i}" title="Xóa khỏi team" aria-label="Xóa khỏi team">✕</button>`
-        : '';
-      const src = im.dataURL || imagePublicUrl(im) || '';
-      return `<div class="img-tile ${selClass}" data-img-idx="${i}" role="${multiSelectMode ? 'checkbox' : 'group'}" aria-checked="${selected ? 'true' : 'false'}">
-        ${badge}${check}${pushBtn}${rmBtn}
-        <img src="${src}" alt="Ảnh ${i + 1}" />
+        ? `<span class="img-check" aria-hidden="true">${selected ? "✓" : ""}</span>`
+        : "";
+      const badge = teamish
+        ? "<span class=\"src-icon src-team\" title=\"Ảnh của team\" aria-label=\"Team\">👥</span>"
+        : "<span class=\"src-icon src-me\" title=\"Ảnh riêng\" aria-label=\"Riêng\">🔒</span>";
+      const rmBtn = (!multiSelectMode && editable)
+        ? `<button type="button" class="btn-tile-action btn-rm-extra" data-rm-img="${i}" title="Xóa ảnh" aria-label="Xóa ảnh">✕</button>`
+        : "";
+      const src = im.thumbDataURL || im.dataURL || imagePublicUrl(im) || "";
+      return `<div class="img-tile ${selClass}" data-img-idx="${i}" role="${multiSelectMode ? "checkbox" : "group"}" aria-checked="${selected ? "true" : "false"}">
+        ${badge}${check}${rmBtn}
+        <img src="${src}" alt="Ảnh ${i + 1}" loading="lazy" data-full-id="${im.id || ""}" />
         <button type="button" class="btn-copy-mini" data-copy-img="${i}">Copy</button>
       </div>`;
-    }).join('');
+    }).join("");
     updateSendFlowUI(p);
   }
 
@@ -388,22 +392,71 @@
       lb.id = 'imgLightbox';
       lb.innerHTML = '<img alt="Ảnh lớn" /><button type="button" class="lb-close" aria-label="Đóng">✕</button>';
       lb.addEventListener('click', () => lb.classList.remove('show'));
+      // Swipe in any direction to close
+      let sx = 0, sy = 0, tracking = false;
+      const img = lb.querySelector('img');
+      lb.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) { tracking = false; return; }
+        tracking = true; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+        img.style.transition = 'none';
+        e.stopPropagation();
+      }, { passive: true });
+      lb.addEventListener('touchmove', (e) => {
+        if (!tracking) return;
+        const dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
+        const d = Math.hypot(dx, dy);
+        img.style.transform = `translate(${dx}px, ${dy}px) scale(${Math.max(0.85, 1 - d / 1500)})`;
+        lb.style.background = `rgba(0,0,0,${Math.max(0.3, 0.92 - d / 500)})`;
+        e.stopPropagation();
+        e.preventDefault();
+      }, { passive: false });
+      lb.addEventListener('touchend', (e) => {
+        if (!tracking) return;
+        tracking = false;
+        const t = e.changedTouches[0];
+        const d = Math.hypot(t.clientX - sx, t.clientY - sy);
+        img.style.transition = 'transform 0.2s ease';
+        lb.style.background = '';
+        img.style.transform = '';
+        if (d > 70) lb.classList.remove('show');
+        e.stopPropagation();
+      });
       document.body.appendChild(lb);
     }
     lb.querySelector('img').src = src;
     lb.classList.add('show');
   }
 
-    async function resizeImageFile(file) {
-    const bitmap = await createImageBitmap(file);
+  async function resizeBitmapToBlob(bitmap, maxEdge, quality) {
     let { width, height } = bitmap;
-    const scale = Math.min(1, MAX_IMG_EDGE / Math.max(width, height));
+    const scale = Math.min(1, maxEdge / Math.max(width, height));
     width = Math.round(width * scale); height = Math.round(height * scale);
-    const canvas = document.createElement('canvas');
+    const canvas = document.createElement("canvas");
     canvas.width = width; canvas.height = height;
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, width, height);
-    bitmap.close && bitmap.close();
-    return new Promise((res) => canvas.toBlob(res, 'image/jpeg', JPEG_QUALITY));
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, width, height);
+    return new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
+  }
+
+  async function processImageFile(file) {
+    const bitmap = await createImageBitmap(file);
+    try {
+      const maxDim = Math.max(bitmap.width, bitmap.height);
+      const smallEnough = maxDim <= MAX_IMG_EDGE && file.size <= 1.5 * 1024 * 1024
+        && /^image\/(jpeg|jpg|png|webp)$/i.test(file.type || '');
+      // Keep original full bytes when already within sane caps; still make a ~300px thumb
+      const fullBlob = smallEnough ? file : await resizeBitmapToBlob(bitmap, MAX_IMG_EDGE, JPEG_QUALITY);
+      const thumbBlob = await resizeBitmapToBlob(bitmap, THUMB_EDGE, THUMB_QUALITY);
+      const fullDataURL = await blobToDataURL(fullBlob);
+      const thumbDataURL = await blobToDataURL(thumbBlob);
+      return { fullBlob, thumbBlob, fullDataURL, thumbDataURL };
+    } finally {
+      bitmap.close && bitmap.close();
+    }
+  }
+
+  async function resizeImageFile(file) {
+    const r = await processImageFile(file);
+    return r.fullBlob;
   }
 
   async function copyText(html, useUnicode) {
@@ -460,20 +513,24 @@
   function isHidden(id) { return !!(id && hiddenIds[id]); }
   function sourceLabel(p) {
     if (!p) return '';
-    if (p.personal) return 'của tôi';
-    if (p.teamShared || p.source === 'team') {
-      const by = (p.authorName || '').trim();
-      return by ? ('team · by ' + by) : 'team';
+    if (isPrivateProduct(p)) return '🔒 của tôi';
+    const by = (p.authorName || '').trim();
+    if (p.teamProduct || p.teamShared || p.source === 'team') {
+      return by ? ('👥 team · ' + by) : '👥 team';
     }
-    return 'team';
+    return '👥 team';
+  }
+
+  function isPrivateProduct(p) {
+    return !!(p && p.personal && !p.teamShared && p.source !== 'team' && !p.teamProduct);
+  }
+  function isTeamVisibleProduct(p) {
+    return !!(p && !isPrivateProduct(p));
   }
   function canEditProduct(p) {
     if (!p) return false;
-    if (p.personal) return true;
-    if (p.teamShared || p.source === 'team') {
-      return !!(myDeviceId && p.authorDeviceId && p.authorDeviceId === myDeviceId);
-    }
-    return false; // admin pack — staff shouldn't edit on phone
+    if (isPrivateProduct(p)) return true;
+    return !!teamKey;
   }
 
   function isHot(p) {
@@ -544,17 +601,16 @@
   }
   function cardThumbHtml(p) {
     const imgs = p.images || [];
-    const synced = imgs.find((im) => im.source === 'synced' || im.path);
-    const local = imgs.find((im) => im.source === 'local' && (im.dataURL || im.url));
-    const any = imgs.find((im) => im.dataURL || imagePublicUrl(im));
-    const im = synced || local || any;
+    const im = imgs.find((x) => x.thumbDataURL || x.dataURL || x.path || imagePublicUrl(x)) || imgs[0];
     if (im) {
-      const src = im.dataURL || imagePublicUrl(im);
-      if (src) {
-        return `<img class="card-thumb" src="${src}" alt="" loading="lazy" decoding="async" width="96" height="96" />`;
+      const eager = im.thumbDataURL || (im.path ? imagePublicUrl(im) : "") || "";
+      const iid = im.id || "";
+      if (eager) {
+        return `<img class="card-thumb" src="${eager}" alt="" loading="lazy" decoding="async" width="96" height="96" data-thumb-id="${iid}" data-product-id="${p.id}" />`;
       }
+      return `<img class="card-thumb card-thumb-lazy" src="icons/logo-128.png" alt="" loading="lazy" decoding="async" width="96" height="96" data-thumb-id="${iid}" data-product-id="${p.id}" data-thumb-pending="1" />`;
     }
-    const initial = ((p.title || '?').trim().charAt(0) || '?').toUpperCase();
+    const initial = ((p.title || "?").trim().charAt(0) || "?").toUpperCase();
     return `<div class="card-thumb placeholder" aria-hidden="true"><img src="icons/logo-128.png" alt="" loading="lazy" width="28" height="28" /><span>${escapeHtml(initial)}</span></div>`;
   }
 
@@ -587,6 +643,7 @@
     };
     const html = hot.map(card).join('') + rest.map(card).join('');
     box.innerHTML = html;
+    observeLazyThumbs();
   }
   function refresh() {
     renderChips();
@@ -624,22 +681,26 @@
       }
     }
     const editable = canEditProduct(p);
-    const isTeamOrAdmin = !p.personal || p.teamShared || p.source === 'team' || p.source === 'admin' || (!p.personal && !p.teamShared);
-    // Hide button: for non-personal (team/admin) items
+    const teamProd = isTeamVisibleProduct(p);
     const hideBtn = $('#btnHideItem');
     if (hideBtn) {
-      const showHide = !p.personal || !!p.teamShared;
-      hideBtn.hidden = !showHide;
+      hideBtn.hidden = !teamProd;
       hideBtn.textContent = '🙈 Ẩn';
     }
     const moveBtn = $('#btnMovePersonal');
-    if (moveBtn) {
-      moveBtn.hidden = !(editable && (p.teamShared || p.source === 'team'));
+    if (moveBtn) moveBtn.hidden = true;
+    const pushProd = $('#btnPushProduct');
+    if (pushProd) {
+      pushProd.hidden = !(isPrivateProduct(p) && editable);
     }
     const editBtn = $('#btnEdit');
     const delBtn = $('#btnDelete');
     if (editBtn) editBtn.style.display = editable ? '' : 'none';
-    if (delBtn) delBtn.style.display = editable ? '' : 'none';
+    if (delBtn) {
+      const canDel = editable && (isPrivateProduct(p) || p.teamProduct);
+      delBtn.style.display = canDel ? '' : 'none';
+    }
+    scheduleDetailHydrate(p);
 
     // Reset send flow when opening a product
     multiSelectMode = false;
@@ -702,7 +763,7 @@
     $('#editTitle').textContent = p ? 'Sửa sản phẩm' : 'Thêm sản phẩm';
     $('#editTitleInput').value = p ? p.title : '';
     $('#editCategory').value = p ? (p.category || '') : 'Tư vấn sản phẩm';
-    const scopeTeam = !!(p && (p.teamShared || p.source === 'team'));
+    const scopeTeam = !!(p && isTeamVisibleProduct(p));
     const rPers = $('#scopePersonal');
     const rTeam = $('#scopeTeam');
     if (rPers && rTeam) {
@@ -710,7 +771,7 @@
       rTeam.checked = scopeTeam;
       // Admin-owned items shouldn't be re-scoped here (not editable anyway)
       const field = $('#editShareScopeField');
-      if (field) field.hidden = !!(p && !p.personal && !p.teamShared && p.source === 'admin');
+      if (field) field.hidden = !!(p && isTeamVisibleProduct(p));
     }
     if (p && p.images) {
       editImages = p.images.map((im) => ({
@@ -914,6 +975,66 @@
     return im;
   }
 
+
+  /** Last-write-wins merge for team product overlays (no full images required). */
+  async function mergeTeamProducts(incoming) {
+    for (const raw of (incoming || [])) {
+      const inc = migrateProduct({
+        ...raw,
+        personal: false,
+        teamShared: true,
+        teamProduct: true,
+        source: 'team'
+      });
+      if (!inc) continue;
+      const prev = products.find((x) => x.id === inc.id);
+      // Never clobber a private product
+      if (prev && isPrivateProduct(prev)) continue;
+      const imgs = [];
+      for (const im of (inc.images || [])) {
+        const prevImg = prev && (prev.images || []).find((x) => x.id === im.id);
+        const row = {
+          ...im,
+          source: im.path ? 'synced' : 'team',
+          teamImage: !im.path,
+          teamProduct: true,
+          // keep cached bytes if we already have them
+          dataURL: (prevImg && prevImg.dataURL) || im.dataURL || null,
+          thumbDataURL: (prevImg && prevImg.thumbDataURL) || im.thumbDataURL || null,
+          hasFull: im.hasFull != null ? im.hasFull : !im.path,
+          hasThumb: im.hasThumb != null ? im.hasThumb : !im.path
+        };
+        if (row.path && !row.dataURL) {
+          // don't block sync on full public fetch — list uses thumbs/path
+        }
+        imgs.push(row);
+      }
+      await putProduct({
+        ...(prev || {}),
+        id: inc.id,
+        title: inc.title,
+        category: inc.category,
+        sortOrder: inc.sortOrder != null ? inc.sortOrder : (prev ? prev.sortOrder : products.length),
+        variants: inc.variants, // team LWW replaces variants entirely
+        images: imgs,
+        personal: false,
+        teamShared: true,
+        teamProduct: true,
+        basedOnAdmin: !!(inc.basedOnAdmin || (prev && prev.basedOnAdmin) || (prev && prev.source === 'admin')),
+        source: 'team',
+        authorDeviceId: inc.authorDeviceId || (prev && prev.authorDeviceId) || null,
+        authorName: inc.authorName || (prev && prev.authorName) || '',
+        remoteUpdatedAt: inc.remoteUpdatedAt || (prev && prev.remoteUpdatedAt) || null,
+        pinned: !!inc.pinned,
+        pinOrder: inc.pinned ? (inc.pinOrder != null ? Number(inc.pinOrder) : 0) : null,
+        createdAt: prev ? prev.createdAt : (inc.createdAt || Date.now()),
+        updatedAt: Date.now()
+      });
+    }
+    products = await getAll();
+    refresh();
+  }
+
   async function mergeProducts(incoming, { replace = false } = {}) {
     if (replace) {
       // Preserve nothing except we clear — but keep local-only images? Spec: replace clears.
@@ -937,10 +1058,22 @@
         if (!inc) continue;
         // Shared team sync must not clobber personal products
         const prev = byId.get(inc.id);
-        if (prev && prev.personal && !inc.personal) continue;
-        if (prev && prev.teamShared && !(inc.teamShared || inc.source === 'team')) continue;
-        const localOnly = prev ? (prev.images || []).filter((im) => im.source === 'local') : [];
-        const keepExtras = prev ? (prev.images || []).filter((im) => im.teamExtra) : [];
+        if (prev && prev.personal && !inc.personal && !inc.teamProduct) continue;
+        // Team product overlay wins over admin public pack
+        if (prev && (prev.teamProduct || prev.teamShared) && !(inc.teamProduct || inc.teamShared || inc.source === 'team')) continue;
+        const localOnly = prev ? (prev.images || []).filter((im) => im.source === 'local' && !im.teamExtra) : [];
+        // Keep team-extra images across admin merges (also recover legacy rows that lost teamExtra flag)
+        const keepExtras = prev ? (prev.images || []).filter((im) => {
+          if (!im) return false;
+          if (im.teamExtra) return true;
+          if (im.path) return false; // never treat admin public images as extras
+          return im.source === 'team' || !!im.teamImage;
+        }).map((im) => ({
+          ...im,
+          source: 'team',
+          teamImage: true,
+          teamExtra: true
+        })) : [];
         const syncedIn = [];
         for (const im of (inc.images || [])) {
           const prevImg = prev && (prev.images || []).find((x) => x.id === im.id || (x.hash && x.hash === im.hash));
@@ -1075,6 +1208,18 @@
       console.warn(e);
     }
     await pullAndMergePersonalCloud();
+    // Re-pull team products after personal cloud
+    try {
+      if (teamKey && window.VCTeamShare) {
+        const tok = await ensureTeamWriteToken();
+        if (tok) {
+          const since = (await getMeta('teamProductsSince')) || '';
+          const pulled = await VCTeamShare.pullTeamProductsIncremental({ teamKey, teamToken: tok, since });
+          if (pulled.products && pulled.products.length) await mergeTeamProducts(pulled.products);
+          if (pulled.newestUpdatedAt) await setMeta('teamProductsSince', pulled.newestUpdatedAt);
+        }
+      }
+    } catch (e) { console.warn('team refresh', e); }
     products = await getAll();
     refresh();
     const sw = await checkServiceWorkerUpdate({ activateIfWaiting: true });
@@ -1089,36 +1234,75 @@
   }
 
 
+  function isTeamExtraImage(im) {
+    if (!im) return false;
+    if (im.path) return false; // admin public media is never an extra
+    if (im.teamExtra) return true;
+    return im.source === 'team' || !!im.teamImage;
+  }
+
+  async function pullAndMergeTeamExtras() {
+    if (!teamKey || !window.VCTeamShare) return false;
+    try {
+      const tok = await ensureTeamWriteToken();
+      if (!tok) return false;
+      const extrasByProduct = await VCTeamShare.pullAllProductExtras({ teamKey, teamToken: tok });
+      await mergeTeamExtras(extrasByProduct);
+      return true;
+    } catch (e) {
+      console.warn('team extras pull', e);
+      return false;
+    }
+  }
+
   async function mergeTeamExtras(extrasByProduct) {
     if (!extrasByProduct || typeof extrasByProduct !== 'object') return;
     let changed = false;
     const ids = Object.keys(extrasByProduct);
+    // Also clear stale extras on products that no longer appear in the server map
+    const serverIds = new Set(ids);
+    for (const prev of products) {
+      if (!prev || !serverIds.has(prev.id)) {
+        if (!(prev.images || []).some(isTeamExtraImage)) continue;
+        // Keep local extras only if this product still has server extras entry; otherwise
+        // leave orphaned extras until server lists them (avoid deleting while offline).
+      }
+    }
     for (const pid of ids) {
       const extras = extrasByProduct[pid] || [];
       const prev = products.find((x) => x.id === pid);
       if (!prev) continue;
-      const nonExtra = (prev.images || []).filter((im) => !im.teamExtra);
-      // Keep local dataURL cache when same id already present
+      // Never drop admin/synced/path images or unrelated locals
+      const nonExtra = (prev.images || []).filter((im) => !isTeamExtraImage(im));
       const prevById = new Map((prev.images || []).map((im) => [im.id, im]));
       const mergedExtras = extras.map((im) => {
         const old = prevById.get(im.id);
-        if (old && old.dataURL && !im.dataURL) return { ...im, dataURL: old.dataURL };
-        if (old && old.dataURL && im.dataURL) return { ...im, dataURL: im.dataURL };
-        return im;
-      });
-      // Drop locals that were pushed (same id now in extras)
+        const base = {
+          ...im,
+          source: 'team',
+          teamImage: true,
+          teamExtra: true,
+          dataURL: (im.dataURL) || (old && old.dataURL) || null
+        };
+        return base;
+      }).filter((im) => im.id && (im.dataURL || im.path));
       const extraIds = new Set(mergedExtras.map((im) => im.id));
-      const kept = nonExtra.filter((im) => !(im.source === 'local' && extraIds.has(im.id)));
+      // Drop local copies that were pushed (same id); never drop path/synced admin images
+      const kept = nonExtra.filter((im) => {
+        if (extraIds.has(im.id) && (im.source === 'local' || im.personalCloud)) return false;
+        return true;
+      });
       const nextImages = [...kept, ...mergedExtras];
       const same =
         nextImages.length === (prev.images || []).length &&
-        nextImages.every((im, i) => prev.images[i] && prev.images[i].id === im.id && prev.images[i].source === im.source);
+        nextImages.every((im, i) => {
+          const o = prev.images[i];
+          return o && o.id === im.id && o.source === im.source && !!o.teamExtra === !!im.teamExtra;
+        });
       if (same) continue;
       await putProduct({ ...prev, images: nextImages, updatedAt: Date.now() });
       changed = true;
     }
-    // Also strip teamExtra images for products that no longer have any extras on server
-    // (only for products we know about that previously had extras — optional; skip for simplicity)
     if (changed) {
       products = await getAll();
       if (currentId) {
@@ -1127,6 +1311,124 @@
       }
       refresh();
     }
+  }
+
+
+  async function scheduleDetailHydrate(p) {
+    if (!p || !teamKey || !window.VCTeamShare) return;
+    try {
+      const tok = await ensureTeamWriteToken();
+      let dirty = false;
+      for (const im of (p.images || [])) {
+        if (im.path) { await ensureImageCached(im); continue; }
+        if (!im.dataURL) {
+          await VCTeamShare.hydrateFull(im, teamKey, tok);
+          if (im.dataURL) dirty = true;
+        }
+      }
+      if (dirty) {
+        await putProduct(p);
+        products = await getAll();
+        if (currentId === p.id) {
+          const fresh = products.find((x) => x.id === p.id) || p;
+          renderDetailImages(fresh);
+        }
+      }
+    } catch (e) { console.warn('hydrate detail', e); }
+  }
+
+  let thumbObserver = null;
+  function ensureThumbObserver() {
+    if (thumbObserver || typeof IntersectionObserver === 'undefined') return thumbObserver;
+    thumbObserver = new IntersectionObserver(async (entries) => {
+      for (const ent of entries) {
+        if (!ent.isIntersecting) continue;
+        const img = ent.target;
+        const pid = img.getAttribute('data-product-id');
+        const iid = img.getAttribute('data-thumb-id');
+        if (!pid || !iid) { thumbObserver.unobserve(img); continue; }
+        const p = products.find((x) => x.id === pid);
+        const im = p && (p.images || []).find((x) => x.id === iid);
+        if (!im) { thumbObserver.unobserve(img); continue; }
+        try {
+          if (im.thumbDataURL) {
+            img.src = im.thumbDataURL;
+          } else if (im.path) {
+            const cached = await ensureImageCached(im);
+            if (cached && cached.dataURL) img.src = cached.dataURL;
+          } else if (teamKey && window.VCTeamShare) {
+            const tok = await ensureTeamWriteToken();
+            await VCTeamShare.hydrateThumb(im, teamKey, tok);
+            if (im.thumbDataURL) {
+              img.src = im.thumbDataURL;
+              await putProduct(p);
+            }
+          } else if (im.dataURL) {
+            img.src = im.dataURL;
+          }
+          img.removeAttribute('data-thumb-pending');
+        } catch (e) { console.warn('lazy thumb', e); }
+        thumbObserver.unobserve(img);
+      }
+    }, { rootMargin: '120px' });
+    return thumbObserver;
+  }
+
+  function observeLazyThumbs() {
+    const obs = ensureThumbObserver();
+    if (!obs) return;
+    document.querySelectorAll('img.card-thumb[data-thumb-pending], img.card-thumb-lazy').forEach((el) => obs.observe(el));
+  }
+
+  async function pushProductToTeam(p, { basedOnAdmin } = {}) {
+    await ensureMyDeviceId();
+    if (!myDeviceId) throw new Error('Không tạo được mã máy');
+    if (!staffDisplayName) {
+      const n = prompt('Tên của bạn (hiện với team):', staffDisplayName || '');
+      if (n == null) throw new Error('cancelled');
+      await saveStaffDisplayName(n);
+      if (!staffDisplayName) throw new Error('Cần tên');
+    }
+    if (!teamKey) {
+      const ok = await ensureUnlockedForSync();
+      if (!ok || !teamKey) throw new Error('Cần mật khẩu đội');
+    }
+    const tok = await ensureTeamWriteToken();
+    if (!tok) throw new Error('Cần mật khẩu đội');
+    // Ensure thumbs exist for local images
+    for (const im of (p.images || [])) {
+      if (im.path) continue;
+      if (im.dataURL && !im.thumbDataURL) {
+        try {
+          const blob = dataURLToBlob(im.dataURL);
+          const processed = await processImageFile(blob);
+          im.thumbDataURL = processed.thumbDataURL;
+          // keep existing full dataURL (already uploaded quality)
+        } catch (_) {}
+      }
+    }
+    const r = await VCTeamShare.pushTeamProduct({
+      product: p,
+      teamKey,
+      teamToken: tok,
+      deviceId: myDeviceId,
+      authorName: staffDisplayName,
+      basedOnAdmin: basedOnAdmin != null ? basedOnAdmin : !!(p.basedOnAdmin || (!p.personal && p.source === 'admin')),
+      ifUpdatedAt: p.remoteUpdatedAt || null
+    });
+    const next = {
+      ...p,
+      ...(r.product || {}),
+      personal: false,
+      teamShared: true,
+      teamProduct: true,
+      source: 'team',
+      remoteUpdatedAt: r.remoteUpdatedAt || null,
+      updatedAt: Date.now()
+    };
+    await putProduct(next);
+    products = await getAll();
+    return next;
   }
 
   async function syncFromGithub() {
@@ -1172,22 +1474,37 @@
     if (list.length) {
       await mergeProducts(list, { replace: false });
     }
-    // Merge team-contributed items + per-product extra images
+    // Incremental team products (LWW overlays over admin)
     try {
       if (teamKey && window.VCTeamShare) {
-        const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
+        const tok = await ensureTeamWriteToken();
         if (tok) {
-          const teamList = await VCTeamShare.pullAllTeamProducts({ teamKey, teamToken: tok });
-          if (teamList.length) {
-            // Remove local copies of team ids that vanished? keep simple: merge upsert
-            await mergeProducts(teamList.map((p) => ({ ...p, teamShared: true, source: 'team', personal: false })), { replace: false });
-          }
+          // One-shot migrate legacy extras → products (keeps Simon image etc.)
           try {
-            const extrasByProduct = await VCTeamShare.pullAllProductExtras({ teamKey, teamToken: tok });
-            await mergeTeamExtras(extrasByProduct);
-          } catch (ee) {
-            console.warn('team extras pull', ee);
+            const migratedFlag = await getMeta('extrasMigratedV25');
+            if (!migratedFlag) {
+              await ensureMyDeviceId();
+              const byId = Object.fromEntries(products.map((p) => [p.id, p]));
+              const mig = await VCTeamShare.migrateExtrasIntoProducts({
+                teamKey, teamToken: tok, deviceId: myDeviceId,
+                authorName: staffDisplayName || 'Simon',
+                baseProductsById: byId
+              });
+              await setMeta('extrasMigratedV25', true);
+              if (mig && mig.length) console.info('migrated extras', mig);
+            }
+          } catch (me) { console.warn('extras migrate', me); }
+
+          const since = (await getMeta('teamProductsSince')) || '';
+          const pulled = await VCTeamShare.pullTeamProductsIncremental({ teamKey, teamToken: tok, since });
+          if (pulled.products && pulled.products.length) {
+            await mergeTeamProducts(pulled.products);
           }
+          if (pulled.newestUpdatedAt) {
+            await setMeta('teamProductsSince', pulled.newestUpdatedAt);
+          }
+        } else {
+          console.warn('team pull skipped: no write token');
         }
       }
     } catch (e) {
@@ -1248,12 +1565,16 @@
         const add = overlays[pid] || [];
         const have = new Set((prev.images || []).map((im) => im.id));
         const merged = [...(prev.images || [])];
+        let dirty = false;
         for (const im of add) {
-          if (!im || have.has(im.id)) continue;
-          merged.push(im);
+          if (!im || !im.id) continue;
+          if (have.has(im.id)) continue; // already present (possibly as team extra)
+          // Do not re-add a personal overlay that was pushed to team (id known as teamExtra elsewhere)
+          merged.push({ ...im, source: 'local', personalCloud: true });
           have.add(im.id);
+          dirty = true;
         }
-        await putProduct({ ...prev, images: merged, updatedAt: Date.now() });
+        if (dirty) await putProduct({ ...prev, images: merged, updatedAt: Date.now() });
       }
     }
     if (incomingPins && typeof incomingPins === 'object') {
@@ -1474,7 +1795,24 @@
       hideOverlay('#detailOverlay');
       refresh();
       toast('Đã ẩn (chỉ mình bạn)');
-      queueDeviceCloudSave();
+      
+    const btnPushProduct = $('#btnPushProduct');
+    if (btnPushProduct) btnPushProduct.onclick = async () => {
+      if (!currentId) return;
+      const p = products.find((x) => x.id === currentId);
+      if (!p || !isPrivateProduct(p)) { toast('Chỉ đẩy sản phẩm riêng'); return; }
+      if (!confirm('Đẩy CẢ sản phẩm (mẫu câu + ảnh) lên team? Mọi người sẽ thấy và sửa được.')) return;
+      try {
+        const next = await pushProductToTeam(p, { basedOnAdmin: false });
+        openDetail(next.id);
+        refresh();
+        toast('Đã đẩy sản phẩm lên team ✓');
+      } catch (e) {
+        if (e && e.message === 'cancelled') return;
+        toast(e.message || 'Đẩy team thất bại');
+      }
+    };
+queueDeviceCloudSave();
     };
     const btnMove = $('#btnMovePersonal');
     if (btnMove) btnMove.onclick = async () => {
@@ -1485,7 +1823,7 @@
       try {
         await ensureMyDeviceId();
         const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
-        await VCTeamShare.deleteTeamItem({ itemId: p.id, deviceId: myDeviceId, teamToken: tok });
+        await VCTeamShare.deleteTeamProduct({ productId: p.id, deviceId: myDeviceId, teamToken: tok });
       } catch (e) {
         toast(e.message || 'Không gỡ team được');
         return;
@@ -1515,7 +1853,7 @@
         try {
           await ensureMyDeviceId();
           const tok = await VCDeviceCloud.getTeamWriteToken(getMeta);
-          await VCTeamShare.deleteTeamItem({ itemId: currentId, deviceId: myDeviceId, teamToken: tok });
+          await VCTeamShare.deleteTeamProduct({ productId: currentId, deviceId: myDeviceId, teamToken: tok });
         } catch (e) {
           toast(e.message || 'Không xóa được trên team');
           return;
@@ -1553,46 +1891,28 @@
       const p = products.find((x) => x.id === currentId);
       if (!p) return;
 
-      const pushBtn = e.target.closest('[data-push-img]');
-      if (pushBtn) {
+      const rmImg = e.target.closest('[data-rm-img]');
+      if (rmImg) {
         e.preventDefault();
         e.stopPropagation();
-        const idx = Number(pushBtn.dataset.pushImg);
-        const im = p.images[idx];
-        if (!im || im.source !== 'local' || !im.dataURL) { toast('Ảnh không hợp lệ'); return; }
+        if (!canEditProduct(p)) { toast('Không có quyền'); return; }
+        const idx = Number(rmImg.dataset.rmImg);
+        if (!confirm('Xóa ảnh này khỏi sản phẩm?')) return;
+        p.images.splice(idx, 1);
+        p.updatedAt = Date.now();
         try {
-          await ensureMyDeviceId();
-          if (!myDeviceId) { toast('Không tạo được mã máy'); return; }
-          if (!staffDisplayName) {
-            const n = prompt('Tên của bạn (hiện với ảnh team):', staffDisplayName || '');
-            if (n == null) return;
-            await saveStaffDisplayName(n);
-            if (!staffDisplayName) { toast('Cần tên để đẩy team'); return; }
+          if (isTeamVisibleProduct(p)) {
+            await pushProductToTeam(p, { basedOnAdmin: !!(p.basedOnAdmin || p.source === 'admin') });
+            toast('Đã xóa ảnh (team)');
+          } else {
+            await putProduct(p);
+            toast('Đã xóa ảnh');
+            queueDeviceCloudSave();
           }
-          if (!teamKey) {
-            const ok = await ensureUnlockedForSync();
-            if (!ok || !teamKey) { toast('Cần mật khẩu đội để đẩy team'); return; }
-          }
-          const tok = await ensureTeamWriteToken();
-          if (!tok) { toast('Cần mật khẩu đội để đẩy team'); return; }
-          toast('Đang đẩy ảnh lên team…');
-          const r = await VCTeamShare.pushProductExtraImage({
-            productId: p.id,
-            image: im,
-            teamKey,
-            teamToken: tok,
-            deviceId: myDeviceId,
-            authorName: staffDisplayName
-          });
-          p.images[idx] = { ...r.image };
-          p.updatedAt = Date.now();
-          await putProduct(p);
           products = await getAll();
           openDetail(p.id);
-          toast('Đã đẩy ảnh lên team ✓');
-          queueDeviceCloudSave();
         } catch (err) {
-          toast(err.message || 'Đẩy ảnh thất bại');
+          toast(err.message || 'Xóa ảnh thất bại');
         }
         return;
       }
@@ -1658,7 +1978,17 @@
       const btn = e.target.closest('[data-copy-img]');
       if (!btn) {
         const imgEl = e.target.closest('.img-tile img');
-        if (imgEl && imgEl.src) openLightbox(imgEl.src);
+        if (imgEl) {
+          const tile = imgEl.closest('[data-img-idx]');
+          const idx = tile ? Number(tile.getAttribute('data-img-idx')) : -1;
+          const im = idx >= 0 ? p.images[idx] : null;
+          if (im) {
+            const resolved = await resolveImageDataURL(im);
+            openLightbox((resolved && resolved.dataURL) || imgEl.src);
+          } else if (imgEl.src) {
+            openLightbox(imgEl.src);
+          }
+        }
         return;
       }
       const im = p.images[Number(btn.dataset.copyImg)];
@@ -1838,18 +2168,34 @@
           if ((p.images||[]).length >= MAX_IMAGES) break;
           if (!file.type.startsWith('image/')) continue;
           try {
-            const blob = await resizeImageFile(file);
-            const dataURL = await blobToDataURL(blob);
+            const processed = await processImageFile(file);
             p.images = p.images || [];
-            p.images.push({ id: uid(), dataURL, source: 'local' });
+            p.images.push({
+              id: uid(),
+              dataURL: processed.fullDataURL,
+              thumbDataURL: processed.thumbDataURL,
+              source: isTeamVisibleProduct(p) ? 'team' : 'local',
+              hasFull: true,
+              hasThumb: true
+            });
           } catch (_) {}
         }
         p.updatedAt = Date.now();
-        await putProduct(p);
+        if (isTeamVisibleProduct(p)) {
+          try {
+            await pushProductToTeam(p, { basedOnAdmin: !!(p.basedOnAdmin || p.source === 'admin') });
+            toast('Đã thêm ảnh (team)');
+          } catch (e) {
+            toast(e.message || 'Lưu team thất bại');
+            return;
+          }
+        } else {
+          await putProduct(p);
+          toast('Đã thêm ảnh');
+          queueDeviceCloudSave();
+        }
         products = await getAll();
         openDetail(p.id);
-        toast('Đã thêm ảnh');
-        queueDeviceCloudSave();
       };
       picker.addEventListener('change', handler);
       picker.click();
@@ -1863,9 +2209,17 @@
         if (editImages.length >= MAX_IMAGES) break;
         if (!file.type.startsWith('image/')) continue;
         try {
-          const blob = await resizeImageFile(file);
-          const dataURL = await blobToDataURL(blob);
-          editImages.push({ id: uid(), blob, url: dataURL, dataURL, source: 'local' });
+          const processed = await processImageFile(file);
+          editImages.push({
+            id: uid(),
+            blob: processed.fullBlob,
+            url: processed.fullDataURL,
+            dataURL: processed.fullDataURL,
+            thumbDataURL: processed.thumbDataURL,
+            source: 'local',
+            hasFull: true,
+            hasThumb: true
+          });
         } catch (_) { toast('Lỗi ảnh'); }
       }
       renderEditImages();
@@ -1886,20 +2240,29 @@
       for (const im of editImages) images.push({
         id: im.id,
         dataURL: im.dataURL || await blobToDataURL(im.blob),
+        thumbDataURL: im.thumbDataURL || null,
         source: im.source || 'local',
         path: im.path || null,
-        hash: im.hash || null
+        hash: im.hash || null,
+        hasFull: true,
+        hasThumb: !!im.thumbDataURL
       });
-      const wantTeam = !!( $('#scopeTeam') && $('#scopeTeam').checked );
+      let wantTeam = !!( $('#scopeTeam') && $('#scopeTeam').checked );
       let personalFlag = !wantTeam;
       let teamShared = wantTeam;
       let authorDeviceId = prev && prev.authorDeviceId;
       let authorName = prev && prev.authorName;
+      const editingTeam = !!(prev && isTeamVisibleProduct(prev));
+      if (editingTeam) {
+        wantTeam = true;
+        personalFlag = false;
+        teamShared = true;
+      }
       if (wantTeam) {
         await ensureMyDeviceId();
         if (!myDeviceId) { toast('Không tạo được mã máy'); return; }
         if (!staffDisplayName) {
-          const n = prompt('Tên của bạn (hiện by … trên mẫu team):', staffDisplayName || '');
+          const n = prompt('Tên của bạn (hiện với team):', staffDisplayName || '');
           if (n == null) return;
           await saveStaffDisplayName(n);
           if (!staffDisplayName) { toast('Cần tên để đẩy team'); return; }
@@ -1909,9 +2272,6 @@
           if (!ok || !teamKey) { toast('Cần mật khẩu đội để đẩy team'); return; }
         }
         authorDeviceId = (prev && prev.authorDeviceId) || myDeviceId;
-        if (prev && prev.authorDeviceId && prev.authorDeviceId !== myDeviceId) {
-          toast('Không phải chủ mẫu — không sửa được'); return;
-        }
         authorName = staffDisplayName;
       }
 
@@ -1933,14 +2293,14 @@
 
       if (wantTeam) {
         try {
-          const tok = await ensureTeamWriteToken();
-          const r = await VCTeamShare.pushTeamItem({
-            product, teamKey, teamToken: tok, deviceId: myDeviceId, authorName: staffDisplayName
+          const saved = await pushProductToTeam(product, {
+            basedOnAdmin: !!(prev && (prev.source === 'admin' || prev.basedOnAdmin))
           });
-          Object.assign(product, r.product || {}, { personal: false, teamShared: true, source: 'team' });
-          toast('Đã đẩy cho team ✓');
+          Object.assign(product, saved, { personal: false, teamShared: true, teamProduct: true, source: 'team' });
+          toast('Đã lưu cho team ✓');
         } catch (e) {
-          toast(e.message || 'Đẩy team thất bại');
+          if (e && e.message === 'cancelled') return;
+          toast(e.message || 'Lưu team thất bại');
           return;
         }
       }
@@ -2098,6 +2458,7 @@
         onStatus: setDeviceCloudStatus
       });
     } catch (_) {}
+    try { await pullAndMergeTeamExtras(); } catch (_) {}
   }
   init().catch((err) => { console.error(err); toast('Lỗi khởi tạo'); });
 })();
